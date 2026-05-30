@@ -1,15 +1,38 @@
+const GUN_SLOTS = [
+  { kind: 'weapon', weaponIndex: 0, label: 'Rifle', count: null, color: '#ffd166' },
+  { kind: 'weapon', weaponIndex: 1, label: 'Shotgun', count: null, color: '#ff9f1c' },
+  { kind: 'weapon', weaponIndex: 2, label: 'Blaster', count: null, color: '#54d2ff' },
+];
+
+const BLOCK_SLOTS = [
+  { kind: 'block', type: 'grass', label: 'Cesped', count: 32, color: '#58a548' },
+  { kind: 'block', type: 'dirt', label: 'Tierra', count: 48, color: '#8b5a2b' },
+  { kind: 'block', type: 'stone', label: 'Piedra', count: 48, color: '#7b7f86' },
+  { kind: 'block', type: 'sand', label: 'Arena', count: 24, color: '#d8c477' },
+  { kind: 'block', type: 'wood', label: 'Madera', count: 24, color: '#8a5a32' },
+];
+
+const SWORD_SLOT = { kind: 'melee', label: 'Espada', count: null, color: '#d7dde6' };
+const DAGGER_SLOT = { kind: 'weapon', weaponIndex: 3, label: 'Daga', count: null, color: '#cfd6df' };
+
+function buildSlots(character) {
+  if (character?.loadout === 'sword') {
+    return [{ ...SWORD_SLOT }];
+  }
+  if (character?.loadout === 'dagger') {
+    return [{ ...DAGGER_SLOT }];
+  }
+  // Default (duck): guns plus buildable blocks.
+  const slots = GUN_SLOTS.map((slot) => ({ ...slot }));
+  if (character?.canPlaceBlocks !== false) {
+    slots.push(...BLOCK_SLOTS.map((slot) => ({ ...slot })));
+  }
+  return slots;
+}
+
 export class Inventory {
-  constructor() {
-    this.slots = [
-      { kind: 'block', type: 'grass', label: 'Cesped', count: 32, color: '#58a548' },
-      { kind: 'block', type: 'dirt', label: 'Tierra', count: 48, color: '#8b5a2b' },
-      { kind: 'block', type: 'stone', label: 'Piedra', count: 48, color: '#7b7f86' },
-      { kind: 'block', type: 'sand', label: 'Arena', count: 24, color: '#d8c477' },
-      { kind: 'block', type: 'wood', label: 'Madera', count: 24, color: '#8a5a32' },
-      { kind: 'weapon', weaponIndex: 0, label: 'Rifle', count: null, color: '#ffd166' },
-      { kind: 'weapon', weaponIndex: 1, label: 'Shotgun', count: null, color: '#ff9f1c' },
-      { kind: 'weapon', weaponIndex: 2, label: 'Blaster', count: null, color: '#54d2ff' },
-    ];
+  constructor(character = null) {
+    this.slots = buildSlots(character);
     this.selectedIndex = 0;
     this.open = false;
   }

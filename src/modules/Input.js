@@ -1,7 +1,7 @@
 const DEFAULT_BINDINGS = {
   Space: 'jump',
   KeyE: 'interact',
-  KeyF: 'use',
+  KeyF: 'alternate',
   KeyQ: 'drop',
   KeyR: 'reload',
   ShiftLeft: 'sprint',

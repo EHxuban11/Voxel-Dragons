@@ -105,6 +105,89 @@ export class Effects {
     this._addShake(0.28, 0.42);
   }
 
+  tracer(start, end, color = 0xffe08a, speed = 110, radius = 0.08) {
+    if (!this.scene) return;
+
+    const from = resolvePosition(start);
+    const to = resolvePosition(end);
+    const axis = to.clone().sub(from);
+    const distance = axis.length();
+    if (distance < 0.001) return;
+    const dir = axis.clone().normalize();
+
+    const geometry = new THREE.SphereGeometry(radius, 6, 6);
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(from);
+    mesh.frustumCulled = false;
+    this.scene.add(mesh);
+
+    const travelTime = Math.max(0.03, distance / speed);
+    const effect = {
+      object: mesh,
+      age: 0,
+      ttl: travelTime,
+      update: (delta) => {
+        effect.age += delta;
+        const traveled = speed * effect.age;
+        if (traveled >= distance) {
+          mesh.position.copy(to);
+          return false;
+        }
+        mesh.position.copy(from).addScaledVector(dir, traveled);
+        return true;
+      },
+    };
+
+    this.effects.push(effect);
+  }
+
+  beam(start, end, color = 0x54d2ff) {
+    if (!this.scene) return;
+
+    const from = resolvePosition(start);
+    const to = resolvePosition(end);
+    const axis = to.clone().sub(from);
+    const length = axis.length();
+    if (length < 0.001) return;
+
+    const geometry = new THREE.CylinderGeometry(0.07, 0.07, length, 8, 1, true);
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(from).addScaledVector(axis, 0.5);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.clone().normalize());
+    mesh.frustumCulled = false;
+    this.scene.add(mesh);
+
+    const ttl = 0.16;
+    const effect = {
+      object: mesh,
+      age: 0,
+      ttl,
+      update: (delta) => {
+        effect.age += delta;
+        const progress = THREE.MathUtils.clamp(effect.age / ttl, 0, 1);
+        material.opacity = 0.9 * (1 - progress);
+        return progress < 1;
+      },
+    };
+
+    this.effects.push(effect);
+    this._addLight(to, color, 4, 9, 0.18);
+  }
+
   update(delta) {
     const dt = Math.max(0, Math.min(delta || 0, 0.08));
 

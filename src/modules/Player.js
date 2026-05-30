@@ -10,6 +10,8 @@ const DEFAULTS = {
   groundY: 0,
   mouseSensitivity: 0.0022,
   maxHealth: 100,
+  maxShield: 100,
+  shieldRegenPercent: 2,
   ammo: 30,
   maxAmmo: 30,
 };
@@ -59,6 +61,12 @@ function readLookDelta(input) {
   };
 }
 
+function isSolidBlock(world, x, y, z) {
+  if (typeof world?.getBlock !== 'function') return false;
+  const type = world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z));
+  return Boolean(type) && type !== 'water';
+}
+
 function getGroundY(world, position, fallback) {
   if (!world) return fallback;
   if (typeof world.getGroundHeight === 'function') {
@@ -82,18 +90,100 @@ export class Player {
     this.cameraHolder.add(this.pitchHolder);
     this.pitchHolder.add(this.camera);
 
-    this.camera.position.set(0, this.config.height, 0);
+    // Eye height lives on the pitch pivot so the camera sits exactly at the
+    // rotation center. Pitching then only turns the view (Minecraft-style)
+    // instead of swinging the eye down into the floor blocks.
+    this.pitchHolder.position.set(0, this.config.height, 0);
+    this.camera.position.set(0, 0, 0);
     this.position = this.cameraHolder.position;
     this.velocity = new THREE.Vector3();
     this.direction = new THREE.Vector3();
 
     this.health = this.config.maxHealth;
     this.maxHealth = this.config.maxHealth;
+    this.maxShield = this.config.maxShield;
+    this.shield = this.config.maxShield;
+    this.shieldRegenPercent = this.config.shieldRegenPercent;
     this.ammo = this.config.ammo;
     this.maxAmmo = this.config.maxAmmo;
 
     this.isGrounded = false;
     this.isAlive = true;
+
+    // Knight/Hunter parry guard (right click). While active, melee attackers
+    // die and dragon fireballs are reflected back.
+    this.guardActive = false;
+    this.guardTimer = 0;
+
+    // Hunter dash state.
+    this.lastMoveDir = new THREE.Vector3(0, 0, -1);
+    this.dashDir = new THREE.Vector3();
+    this.dashActive = false;
+    this.dashRemaining = 0;
+    this.dashSpeed = 0;
+  }
+
+  startDash(distance, speed) {
+    if (this.dashActive || !this.isAlive) return false;
+    this.dashDir.copy(this.lastMoveDir);
+    this.dashDir.y = 0;
+    if (this.dashDir.lengthSq() < 0.0001) return false;
+    this.dashDir.normalize();
+    this.dashRemaining = distance;
+    this.dashSpeed = speed;
+    this.dashActive = true;
+    return true;
+  }
+
+  updateDash(delta, world) {
+    const step = Math.min(this.dashSpeed * delta, this.dashRemaining);
+    const pos = this.cameraHolder.position;
+    const nextX = pos.x + this.dashDir.x * step;
+    const nextZ = pos.z + this.dashDir.z * step;
+
+    if (this.isBlockedAt(world, nextX, nextZ)) {
+      // Hit a block -> the dash stops here. Enemies are ignored (pass through).
+      this.dashActive = false;
+      this.dashRemaining = 0;
+    } else {
+      pos.x = nextX;
+      pos.z = nextZ;
+      this.dashRemaining -= step;
+      if (this.dashRemaining <= 0) {
+        this.dashActive = false;
+        this.dashRemaining = 0;
+      }
+    }
+
+    this.velocity.y = 0;
+    this.resolveVerticalCollision(world);
+  }
+
+  isBlockedAt(world, x, z) {
+    if (typeof world?.getBlock !== 'function') return false;
+    const cx = Math.floor(x);
+    const cz = Math.floor(z);
+    const feet = Math.floor(this.cameraHolder.position.y + 0.1);
+    const head = Math.floor(this.cameraHolder.position.y + this.config.height - 0.1);
+    for (let y = feet; y <= head; y += 1) {
+      if (isSolidBlock(world, cx, y, cz)) return true;
+    }
+    return false;
+  }
+
+  activateGuard(duration) {
+    this.guardActive = true;
+    this.guardTimer = Math.max(this.guardTimer, duration);
+  }
+
+  updateGuard(delta) {
+    if (this.guardTimer > 0) {
+      this.guardTimer -= delta;
+      if (this.guardTimer <= 0) {
+        this.guardTimer = 0;
+        this.guardActive = false;
+      }
+    }
   }
 
   get object() {
@@ -118,9 +208,21 @@ export class Player {
   update(delta, input = {}, world = null) {
     if (!Number.isFinite(delta) || delta <= 0 || !this.isAlive) return;
 
+    if (this.maxShield > 0 && this.shield < this.maxShield) {
+      this.shield = Math.min(
+        this.maxShield,
+        this.shield + this.maxShield * (this.shieldRegenPercent / 100) * delta,
+      );
+    }
+
     const lookDelta = readLookDelta(input);
     if (lookDelta.x || lookDelta.y) {
       this.look(lookDelta.x, lookDelta.y);
+    }
+
+    if (this.dashActive) {
+      this.updateDash(delta, world);
+      return;
     }
 
     const xAxis = readAxis(input, ['KeyD', 'd', 'right', 'moveRight'], ['KeyA', 'a', 'left', 'moveLeft']);
@@ -132,6 +234,10 @@ export class Player {
 
     if (MOVE.lengthSq() > 0) {
       MOVE.normalize();
+      this.lastMoveDir.copy(MOVE);
+    } else {
+      this.lastMoveDir.set(FORWARD.x, 0, FORWARD.z);
+      if (this.lastMoveDir.lengthSq() > 0) this.lastMoveDir.normalize();
     }
 
     const sprinting = hasInput(input, ['ShiftLeft', 'ShiftRight', 'shift', 'sprint']);
@@ -147,20 +253,85 @@ export class Player {
     this.velocity.y -= this.config.gravity * delta;
     this.cameraHolder.position.addScaledVector(this.velocity, delta);
 
-    const groundY = getGroundY(world, this.cameraHolder.position, this.config.groundY);
-    if (this.cameraHolder.position.y <= groundY) {
-      this.cameraHolder.position.y = groundY;
-      this.velocity.y = Math.max(0, this.velocity.y);
-      this.isGrounded = true;
-    }
+    this.resolveVerticalCollision(world);
 
     this.direction.copy(FORWARD);
   }
 
+  resolveVerticalCollision(world) {
+    const pos = this.cameraHolder.position;
+    const headHeight = this.config.height;
+
+    // Voxel-aware path: resolve against the actual blocks in the player's
+    // column so floating blocks above never snap us up, and a ceiling stops
+    // an upward jump instead of teleporting us on top of the block.
+    if (typeof world?.getBlock === 'function') {
+      const cx = Math.floor(pos.x);
+      const cz = Math.floor(pos.z);
+
+      // Ceiling: heading up into a solid block -> stop just below it.
+      if (this.velocity.y > 0) {
+        const headCell = Math.floor(pos.y + headHeight);
+        if (isSolidBlock(world, cx, headCell, cz)) {
+          pos.y = headCell - headHeight - 0.001;
+          this.velocity.y = 0;
+        }
+      }
+
+      // Ground: highest solid block at or below the feet.
+      let groundTop = null;
+      for (let y = Math.floor(pos.y + 0.05); y >= -4; y -= 1) {
+        if (isSolidBlock(world, cx, y, cz)) {
+          groundTop = y + 1;
+          break;
+        }
+      }
+
+      if (groundTop !== null && pos.y <= groundTop) {
+        pos.y = groundTop;
+        this.velocity.y = Math.max(0, this.velocity.y);
+        this.isGrounded = true;
+      } else {
+        this.isGrounded = false;
+      }
+      return;
+    }
+
+    // Fallback for environments without a voxel API (e.g. unit tests).
+    const groundY = getGroundY(world, pos, this.config.groundY);
+    if (pos.y <= groundY) {
+      pos.y = groundY;
+      this.velocity.y = Math.max(0, this.velocity.y);
+      this.isGrounded = true;
+    } else {
+      this.isGrounded = false;
+    }
+  }
+
   damage(amount) {
-    this.health = Math.max(0, this.health - Math.max(0, amount));
+    let remaining = Math.max(0, amount);
+
+    if (this.shield > 0) {
+      const absorbed = Math.min(this.shield, remaining);
+      this.shield -= absorbed;
+      remaining -= absorbed;
+    }
+
+    this.health = Math.max(0, this.health - remaining);
     this.isAlive = this.health > 0;
     return this.health;
+  }
+
+  revive() {
+    this.health = this.maxHealth;
+    this.shield = this.maxShield;
+    this.isAlive = true;
+    this.guardActive = false;
+    this.guardTimer = 0;
+    this.dashActive = false;
+    this.dashRemaining = 0;
+    this.velocity.set(0, 0, 0);
+    return this;
   }
 
   heal(amount) {

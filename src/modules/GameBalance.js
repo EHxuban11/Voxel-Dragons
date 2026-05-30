@@ -80,6 +80,8 @@ export const BALANCE = deepFreeze({
     groundY: 0,
     mouseSensitivity: 0.0022,
     maxHealth: 100,
+    maxShield: 100,
+    shieldRegenPercent: 2,
     ammo: 30,
     maxAmmo: 30,
     spawnYOffset: 2.2,
@@ -104,14 +106,16 @@ export const BALANCE = deepFreeze({
     {
       id: 'shotgun',
       name: 'Shotgun',
-      damage: 11,
-      range: 42,
-      fireRate: 1.35,
+      damage: 9,
+      range: 22,
+      fireRate: 1.2,
       clipSize: 8,
       reserveAmmo: 40,
       reloadTime: 1.85,
       pellets: 8,
-      spread: 0.075,
+      spread: 0.09,
+      cone: true,
+      spreadAngle: 0.22,
       automatic: false,
       projectile: false,
       flashColor: 0xff9f1c,
@@ -119,21 +123,67 @@ export const BALANCE = deepFreeze({
     {
       id: 'blaster',
       name: 'Blaster',
-      damage: 36,
-      range: 120,
-      fireRate: 3.2,
-      clipSize: 18,
-      reserveAmmo: 72,
-      reloadTime: 1.7,
+      damage: 150,
+      range: 140,
+      fireRate: 0.2,
+      clipSize: 20,
+      reserveAmmo: 60,
+      reloadTime: 2.2,
       pellets: 1,
-      spread: 0.004,
+      spread: 0,
       automatic: true,
-      projectile: true,
-      projectileSpeed: 72,
-      projectileRadius: 0.12,
+      projectile: false,
+      penetrate: true,
       flashColor: 0x54d2ff,
     },
+    {
+      id: 'dagger',
+      name: 'Daga',
+      damage: 26,
+      range: 70,
+      fireRate: 2.4,
+      clipSize: 99,
+      reserveAmmo: 999,
+      reloadTime: 1.0,
+      pellets: 1,
+      spread: 0.012,
+      automatic: false,
+      projectile: true,
+      projectileSpeed: 36,
+      projectileRadius: 0.12,
+      gravity: 24, // gives the thrown dagger its arc/drop
+      flashColor: 0xcfd6df,
+    },
   ],
+
+  zombies: {
+    health: 30,
+    speed: 3.4,
+    damage: 8,
+    attackRange: 2.3,
+    attackCooldown: 1.1,
+    spawnRadiusMin: 14,
+    spawnRadiusMax: 24,
+  },
+
+  sword: {
+    damage: 40, // one-shots a zombie (30 hp)
+    range: 4.2,
+    cooldown: 1.0, // seconds between slashes
+    arcCos: 0.3, // frontal cone (~72 degrees half-angle)
+  },
+
+  guard: {
+    duration: 0.8, // seconds the guard stays up
+    cooldown: 1.25, // before it can be raised again
+    reflectDamage: 100, // a reflected fireball one-shots the dragon
+  },
+
+  dash: {
+    distance: 5, // blocks travelled
+    speed: 30, // blocks per second (≈0.17s dash)
+    cooldown: 5, // seconds between dashes
+  },
 
   dragons: {
     count: 3,

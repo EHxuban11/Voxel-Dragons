@@ -1,11 +1,17 @@
 const DEFAULT_STATE = {
   health: 100,
   maxHealth: 100,
+  shield: 100,
+  maxShield: 100,
   ammo: 0,
   maxAmmo: 0,
   weapon: 'Blaster',
   dragons: 0,
   dragonsTotal: null,
+  zombies: 0,
+  wave: 1,
+  guard: false,
+  ammoText: null,
   inventory: null,
 };
 
@@ -110,6 +116,28 @@ function injectStyles() {
       padding: 7px 9px;
     }
 
+    .vd-shield-label {
+      margin-bottom: 6px;
+      color: #dff4ff;
+    }
+
+    .vd-shield-shell {
+      height: 14px;
+      margin-bottom: 10px;
+      overflow: hidden;
+      background: rgba(18, 22, 26, 0.72);
+      border: 2px solid rgba(255, 255, 255, 0.38);
+      box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.45);
+    }
+
+    .vd-shield-fill {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, #2f8ed8, #54d2ff 60%, #b8ecff);
+      transform-origin: left center;
+      transition: transform 120ms ease-out, filter 120ms ease-out;
+    }
+
     .vd-health-label {
       margin-bottom: 6px;
       color: #fff5f5;
@@ -159,6 +187,21 @@ function injectStyles() {
     .vd-message.is-visible {
       opacity: 1;
       transform: translateX(-50%) translateY(-4px);
+    }
+
+    .vd-guard {
+      position: absolute;
+      left: 50%;
+      top: calc(50% + 34px);
+      transform: translateX(-50%);
+      font-size: 30px;
+      opacity: 0;
+      transition: opacity 80ms ease-out;
+      filter: drop-shadow(0 0 8px rgba(120, 210, 255, 0.9));
+    }
+
+    .vd-guard.is-active {
+      opacity: 1;
     }
 
     .vd-vignette {
@@ -399,11 +442,14 @@ export class HUD {
     this.root.innerHTML = `
       <div class="vd-vignette"></div>
       <div class="vd-crosshair"></div>
-      <div class="vd-help">WASD mover | 1-8 hotbar | click izq minar/disparar | click der colocar | E inventario</div>
-      <div class="vd-top-right">Dragones: <span data-hud="dragons">0</span></div>
+      <div class="vd-guard" data-hud="guard">🛡️</div>
+      <div class="vd-help">WASD mover | Espacio saltar | 1-8 hotbar | click izq atacar | click der bloque/guardia | E inventario</div>
+      <div class="vd-top-right">Oleada: <span data-hud="wave">1</span><br>Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span></div>
       <div class="vd-message" data-hud="message"></div>
       <div class="vd-inventory" data-hud="inventoryPanel"></div>
       <div class="vd-bottom-left">
+        <div class="vd-shield-label">Escudo <span data-hud="shield">100</span>%</div>
+        <div class="vd-shield-shell"><div class="vd-shield-fill" data-hud="shieldFill"></div></div>
         <div class="vd-health-label">Vida <span data-hud="health">100</span>%</div>
         <div class="vd-health-shell"><div class="vd-health-fill" data-hud="healthFill"></div></div>
       </div>
@@ -416,11 +462,16 @@ export class HUD {
 
     this.nodes = {
       vignette: this.root.querySelector('.vd-vignette'),
+      guard: this.root.querySelector('[data-hud="guard"]'),
+      shield: this.root.querySelector('[data-hud="shield"]'),
+      shieldFill: this.root.querySelector('[data-hud="shieldFill"]'),
       health: this.root.querySelector('[data-hud="health"]'),
       healthFill: this.root.querySelector('[data-hud="healthFill"]'),
       ammo: this.root.querySelector('[data-hud="ammo"]'),
       weapon: this.root.querySelector('[data-hud="weapon"]'),
       dragons: this.root.querySelector('[data-hud="dragons"]'),
+      zombies: this.root.querySelector('[data-hud="zombies"]'),
+      wave: this.root.querySelector('[data-hud="wave"]'),
       message: this.root.querySelector('[data-hud="message"]'),
       hotbar: this.root.querySelector('[data-hud="hotbar"]'),
       inventoryPanel: this.root.querySelector('[data-hud="inventoryPanel"]'),
@@ -435,16 +486,26 @@ export class HUD {
     const maxHealth = Math.max(1, firstNumber(nextState, ['maxHealth', 'healthMax'], DEFAULT_STATE.maxHealth));
     const health = Math.max(0, Math.min(maxHealth, firstNumber(nextState, ['health', 'hp'], DEFAULT_STATE.health)));
     const healthPercent = Math.round((health / maxHealth) * 100);
+    const maxShield = Math.max(0, firstNumber(nextState, ['maxShield', 'shieldMax'], DEFAULT_STATE.maxShield));
+    const shield = Math.max(0, Math.min(maxShield, firstNumber(nextState, ['shield'], DEFAULT_STATE.shield)));
+    const shieldPercent = maxShield > 0 ? Math.round((shield / maxShield) * 100) : 0;
     const { ammo, maxAmmo } = getAmmo(nextState);
     const weapon = getWeaponName(nextState);
     const dragons = getDragonCount(nextState);
 
+    this.nodes.shield.textContent = String(shieldPercent);
+    this.nodes.shieldFill.style.transform = `scaleX(${maxShield > 0 ? shield / maxShield : 0})`;
     this.nodes.health.textContent = String(healthPercent);
     this.nodes.healthFill.style.transform = `scaleX(${health / maxHealth})`;
     this.nodes.healthFill.style.filter = healthPercent <= 25 ? 'saturate(1.35) brightness(1.15)' : '';
     this.nodes.weapon.textContent = weapon;
-    this.nodes.ammo.textContent = maxAmmo > 0 ? `${ammo} / ${maxAmmo}` : String(ammo);
+    this.nodes.ammo.textContent = typeof nextState.ammoText === 'string' && nextState.ammoText
+      ? nextState.ammoText
+      : (maxAmmo > 0 ? `${ammo} / ${maxAmmo}` : String(ammo));
     this.nodes.dragons.textContent = dragons.total === null ? String(dragons.value) : `${dragons.value} / ${dragons.total}`;
+    this.nodes.zombies.textContent = String(firstNumber(nextState, ['zombies'], DEFAULT_STATE.zombies));
+    this.nodes.wave.textContent = String(firstNumber(nextState, ['wave'], DEFAULT_STATE.wave));
+    this.nodes.guard.classList.toggle('is-active', Boolean(nextState.guard));
     this.renderInventory(nextState.inventory);
   }
 

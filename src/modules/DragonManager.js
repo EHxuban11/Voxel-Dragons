@@ -25,6 +25,7 @@ export class DragonManager {
     const options = scene ? maybeOptions : sceneOrOptions || {};
 
     this.scene = scene;
+    this.camera = options.camera ?? null;
     this.group = new THREE.Group();
     this.group.name = 'DragonManager';
     this.dragons = [];
@@ -35,6 +36,7 @@ export class DragonManager {
     this.tmpDirection = new THREE.Vector3();
     this.tmpPreviousPosition = new THREE.Vector3();
     this.tmpRaycaster = new THREE.Raycaster();
+    this.tmpQuaternion = new THREE.Quaternion();
     this.elapsed = 0;
 
     this.count = options.count ?? DEFAULT_DRAGON_COUNT;
@@ -42,8 +44,15 @@ export class DragonManager {
     this.spawnRadius = options.spawnRadius ?? 34;
     this.minAltitude = options.minAltitude ?? 13;
     this.maxAltitude = options.maxAltitude ?? 22;
+    this.bounds = {
+      minX: options.bounds?.minX ?? -22,
+      maxX: options.bounds?.maxX ?? 22,
+      minZ: options.bounds?.minZ ?? -22,
+      maxZ: options.bounds?.maxZ ?? 22,
+    };
     this.fireballDamage = options.fireballDamage ?? 14;
     this.fireballSpeed = options.fireballSpeed ?? 24;
+    this.reflectDamage = options.reflectDamage ?? 100;
 
     this.createSharedAssets();
     this.spawnDragons(this.count);
@@ -88,6 +97,13 @@ export class DragonManager {
         roughness: 0.55,
         flatShading: true,
       }),
+      reflectedFireball: new THREE.MeshStandardMaterial({
+        color: 0x54d2ff,
+        emissive: 0x1f9bff,
+        emissiveIntensity: 1.6,
+        roughness: 0.5,
+        flatShading: true,
+      }),
     };
   }
 
@@ -102,23 +118,84 @@ export class DragonManager {
         aggression: 0.58 + i * 0.13,
         angle,
         altitude,
-        radius: this.spawnRadius + i * 5,
+        // Orbit radius oscillates so dragons drift in and out around the
+        // player. Kept inside the map bounds (clamped in updateDragon too).
+        orbitRadius: 10 + (i % 3) * 4,
+        radiusAmplitude: 5 + (i % 3) * 2,
+        radiusRate: 0.45 + (i % 4) * 0.16,
+        radiusPhase: i * 1.3,
         speed: 0.24 + i * 0.035,
         attackCooldown: 1.5 + i * 0.55,
         mesh: this.createDragonMesh(i),
+        healthBar: this.createHealthBar(),
         velocity: new THREE.Vector3(),
         dead: false,
       };
 
       dragon.mesh.position.set(
-        this.origin.x + Math.cos(angle) * dragon.radius,
+        this.origin.x + Math.cos(angle) * dragon.orbitRadius,
         altitude,
-        this.origin.z + Math.sin(angle) * dragon.radius,
+        this.origin.z + Math.sin(angle) * dragon.orbitRadius,
       );
       dragon.mesh.userData.dragon = dragon;
       this.group.add(dragon.mesh);
+      this.group.add(dragon.healthBar);
       this.dragons.push(dragon);
     }
+  }
+
+  createHealthBar() {
+    const width = 3;
+    const height = 0.4;
+    const group = new THREE.Group();
+
+    const bg = new THREE.Mesh(
+      new THREE.PlaneGeometry(width + 0.18, height + 0.18),
+      new THREE.MeshBasicMaterial({
+        color: 0x101418,
+        transparent: true,
+        opacity: 0.7,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    bg.renderOrder = 998;
+    bg.frustumCulled = false;
+
+    const fillGeometry = new THREE.PlaneGeometry(1, height);
+    fillGeometry.translate(0.5, 0, 0); // left-anchored unit quad
+    const fill = new THREE.Mesh(
+      fillGeometry,
+      new THREE.MeshBasicMaterial({
+        color: 0x49d049,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    fill.position.x = -width / 2;
+    fill.scale.x = width;
+    fill.position.z = 0.01;
+    fill.renderOrder = 999;
+    fill.frustumCulled = false;
+
+    group.add(bg, fill);
+    group.userData.fill = fill;
+    group.userData.width = width;
+    group.frustumCulled = false;
+    return group;
+  }
+
+  clearDragons() {
+    for (const dragon of this.dragons) {
+      this.group.remove(dragon.mesh);
+      if (dragon.healthBar) this.group.remove(dragon.healthBar);
+    }
+    this.dragons.length = 0;
+  }
+
+  spawnWave(count) {
+    this.clearDragons();
+    this.spawnDragons(Math.max(0, Math.floor(count)));
   }
 
   createDragonMesh(index) {
@@ -190,6 +267,7 @@ export class DragonManager {
       if (dragon.dead) continue;
       this.updateDragon(dragon, dt, playerPosition);
       this.tryFireball(dragon, dt, player, playerPosition);
+      this.updateHealthBar(dragon);
     }
 
     this.updateFireballs(dt, player, playerPosition);
@@ -197,15 +275,21 @@ export class DragonManager {
 
   updateDragon(dragon, delta, playerPosition) {
     dragon.angle += dragon.speed * delta;
-    const pressure = dragon.aggression * 0.35;
     const orbitCenter = playerPosition.lengthSq() > 0.001 ? playerPosition : this.origin;
-    const radius = dragon.radius * (1 - pressure);
+
+    // Radius breathes in and out so the dragon circles the player, sometimes
+    // swooping closer and sometimes pulling away.
+    const radius = dragon.orbitRadius
+      + Math.sin(this.elapsed * dragon.radiusRate + dragon.radiusPhase) * dragon.radiusAmplitude;
     const bob = Math.sin(this.elapsed * 2.5 + dragon.id * 1.7) * 1.6;
 
+    const targetX = orbitCenter.x + Math.cos(dragon.angle) * radius;
+    const targetZ = orbitCenter.z + Math.sin(dragon.angle) * radius;
+
     this.tmpTarget.set(
-      orbitCenter.x + Math.cos(dragon.angle) * radius,
+      THREE.MathUtils.clamp(targetX, this.bounds.minX, this.bounds.maxX),
       dragon.altitude + bob,
-      orbitCenter.z + Math.sin(dragon.angle) * radius,
+      THREE.MathUtils.clamp(targetZ, this.bounds.minZ, this.bounds.maxZ),
     );
 
     this.tmpPreviousPosition.copy(dragon.mesh.position);
@@ -225,6 +309,25 @@ export class DragonManager {
       leftWing.rotation.x = flap;
       rightWing.rotation.x = -flap;
     }
+  }
+
+  updateHealthBar(dragon) {
+    const bar = dragon.healthBar;
+    if (!bar) return;
+
+    bar.position.copy(dragon.mesh.position);
+    bar.position.y += 3.3;
+
+    if (this.camera) {
+      this.camera.getWorldQuaternion(this.tmpQuaternion);
+      bar.quaternion.copy(this.tmpQuaternion);
+    }
+
+    const ratio = THREE.MathUtils.clamp(dragon.health / dragon.maxHealth, 0, 1);
+    const fill = bar.userData.fill;
+    fill.scale.x = bar.userData.width * ratio;
+    fill.visible = ratio > 0;
+    fill.material.color.setHex(ratio > 0.5 ? 0x49d049 : ratio > 0.25 ? 0xe0c020 : 0xd83b3b);
   }
 
   tryFireball(dragon, delta, player, playerPosition) {
@@ -254,26 +357,66 @@ export class DragonManager {
   updateFireballs(delta, player, playerPosition) {
     for (let i = this.fireballs.length - 1; i >= 0; i -= 1) {
       const fireball = this.fireballs[i];
-      fireball.userData.life -= delta;
-      fireball.position.addScaledVector(fireball.userData.velocity, delta);
+      const data = fireball.userData;
+      data.life -= delta;
+
+      // Reflected fireballs home back toward the dragon that fired them.
+      if (data.reflected) {
+        const target = data.homingTarget;
+        if (!target || target.dead || data.life <= 0 || fireball.position.y < -2) {
+          this.group.remove(fireball);
+          this.fireballs.splice(i, 1);
+          continue;
+        }
+
+        this.tmpDirection.subVectors(target.mesh.position, fireball.position);
+        const distance = this.tmpDirection.length();
+        if (distance > 0.0001) this.tmpDirection.normalize();
+        const speed = data.velocity.length() || this.fireballSpeed;
+        data.velocity.lerp(this.tmpDirection.multiplyScalar(speed), Math.min(1, delta * 6));
+        fireball.position.addScaledVector(data.velocity, delta);
+        fireball.rotation.x += delta * 9;
+
+        if (distance <= FIREBALL_COLLISION_RADIUS + 1.4) {
+          target.health = Math.max(0, target.health - data.damage);
+          const killed = target.health <= 0;
+          if (killed) this.killDragon(target);
+          this.impacts.push({ position: fireball.position.clone(), damage: 0, hitPlayer: false, hitDragon: true, killed });
+          this.group.remove(fireball);
+          this.fireballs.splice(i, 1);
+        }
+        continue;
+      }
+
+      fireball.position.addScaledVector(data.velocity, delta);
       fireball.rotation.x += delta * 8;
       fireball.rotation.y += delta * 5;
 
       const hitPlayer = Boolean(player) && fireball.position.distanceTo(playerPosition) <= FIREBALL_COLLISION_RADIUS;
-      const expired = fireball.userData.life <= 0 || fireball.position.y < -2;
+      const expired = data.life <= 0 || fireball.position.y < -2;
+
+      // Parry: a raised guard reflects the fireball back at its owner dragon.
+      if (hitPlayer && player?.guardActive && data.owner && !data.owner.dead) {
+        data.reflected = true;
+        data.homingTarget = data.owner;
+        data.damage = this.reflectDamage;
+        data.life = 4;
+        this.tmpDirection.subVectors(data.owner.mesh.position, fireball.position).normalize();
+        data.velocity.copy(this.tmpDirection).multiplyScalar(this.fireballSpeed * 1.3);
+        fireball.material = this.material.reflectedFireball;
+        this.impacts.push({ position: fireball.position.clone(), damage: 0, hitPlayer: false, reflected: true });
+        continue;
+      }
+
       if (hitPlayer || expired) {
-        this.impacts.push({
-          position: fireball.position.clone(),
-          damage: fireball.userData.damage,
-          hitPlayer,
-        });
+        this.impacts.push({ position: fireball.position.clone(), damage: data.damage, hitPlayer });
         this.group.remove(fireball);
         this.fireballs.splice(i, 1);
       }
     }
   }
 
-  hitByRay(ray, damage = 25) {
+  peekRay(ray) {
     if (!ray) return null;
 
     const isRaycaster = typeof ray.intersectObjects === 'function' && ray.ray;
@@ -304,24 +447,103 @@ export class DragonManager {
     const dragon = this.dragons.find((candidate) => candidate.mesh === root);
     if (!dragon) return null;
 
+    return { dragon, point: hits[0].point.clone(), distance: hits[0].distance };
+  }
+
+  applyRayHit(peek, damage) {
+    const dragon = peek.dragon;
     dragon.health = Math.max(0, dragon.health - damage);
     if (dragon.health <= 0) {
       this.killDragon(dragon);
     }
-
     return {
       dragon,
-      point: hits[0].point.clone(),
-      distance: hits[0].distance,
+      point: peek.point,
+      distance: peek.distance,
       killed: dragon.dead,
       health: dragon.health,
     };
+  }
+
+  hitByRay(ray, damage = 25) {
+    const peek = this.peekRay(ray);
+    return peek ? this.applyRayHit(peek, damage) : null;
+  }
+
+  hitMelee(origin, direction, range, damage, arcCos = 0.3) {
+    const results = [];
+    const toTarget = new THREE.Vector3();
+    for (const dragon of this.dragons) {
+      if (dragon.dead) continue;
+      toTarget.subVectors(dragon.mesh.position, origin);
+      const distance = toTarget.length();
+      if (distance > range || distance < 0.0001) continue;
+      toTarget.normalize();
+      if (toTarget.dot(direction) < arcCos) continue;
+      dragon.health = Math.max(0, dragon.health - damage);
+      const killed = dragon.health <= 0;
+      if (killed) this.killDragon(dragon);
+      results.push({ position: dragon.mesh.position.clone(), killed });
+    }
+    return results;
+  }
+
+  hitAllByRay(ray, damage = 25) {
+    if (!ray) return [];
+
+    const isRaycaster = typeof ray.intersectObjects === 'function' && ray.ray;
+    const raycaster = isRaycaster ? ray : this.tmpRaycaster;
+    if (!isRaycaster) {
+      if (ray.origin && ray.direction) {
+        raycaster.ray.copy(ray);
+      } else {
+        return [];
+      }
+      raycaster.near = 0;
+      raycaster.far = Infinity;
+    }
+
+    const meshes = [];
+    for (const dragon of this.dragons) {
+      if (!dragon.dead) {
+        dragon.mesh.traverse((child) => {
+          if (child.isMesh) meshes.push(child);
+        });
+      }
+    }
+
+    const hits = raycaster.intersectObjects(meshes, false);
+    const results = [];
+    const seen = new Set();
+
+    for (const intersection of hits) {
+      const root = intersection.object.userData.dragonRoot;
+      const dragon = this.dragons.find((candidate) => candidate.mesh === root);
+      if (!dragon || dragon.dead || seen.has(dragon.id)) continue;
+
+      seen.add(dragon.id);
+      dragon.health = Math.max(0, dragon.health - damage);
+      if (dragon.health <= 0) {
+        this.killDragon(dragon);
+      }
+
+      results.push({
+        dragon,
+        point: intersection.point.clone(),
+        distance: intersection.distance,
+        killed: dragon.dead,
+        health: dragon.health,
+      });
+    }
+
+    return results;
   }
 
   killDragon(dragon) {
     dragon.dead = true;
     dragon.mesh.visible = false;
     this.group.remove(dragon.mesh);
+    if (dragon.healthBar) this.group.remove(dragon.healthBar);
   }
 
   getAliveDragons() {

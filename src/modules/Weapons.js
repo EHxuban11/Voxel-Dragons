@@ -48,8 +48,10 @@ const DEFAULT_WEAPONS = [
 ];
 
 const UP = new THREE.Vector3(0, 1, 0);
+const PROJECTILE_FORWARD = new THREE.Vector3(0, 0, -1);
 const CALLBACK_NAMES = [
   'onAmmoChange',
+  'onBeam',
   'onEmpty',
   'onFire',
   'onHit',
@@ -59,6 +61,7 @@ const CALLBACK_NAMES = [
   'onProjectileSpawn',
   'onReloadComplete',
   'onReloadStart',
+  'onTracer',
   'onWeaponSwitch',
 ];
 
@@ -96,6 +99,8 @@ export class Weapons {
     this._scratchDirection = new THREE.Vector3();
     this._scratchRight = new THREE.Vector3();
     this._scratchUp = new THREE.Vector3();
+    this._scratchStep = new THREE.Vector3();
+    this._scratchProjDir = new THREE.Vector3();
   }
 
   get currentWeapon() {
@@ -171,20 +176,36 @@ export class Weapons {
 
     this._spawnMuzzleFlash(origin, direction, weapon, { ...context, scene });
 
-    if (weapon.projectile && this.projectilesEnabled && context.projectile !== false) {
+    if (weapon.penetrate && context.penetrate !== false) {
+      for (const payload of this._firePenetrating(origin, direction, weapon, { ...context, scene, targets })) {
+        hits.push(payload);
+      }
+    } else if (weapon.projectile && this.projectilesEnabled && context.projectile !== false) {
       this._spawnProjectile(origin, direction, weapon, { ...context, scene, targets });
     } else {
       for (let i = 0; i < weapon.pellets; i += 1) {
-        const pelletDirection = this._spreadDirection(direction, weapon.spread);
+        const pelletDirection = weapon.cone
+          ? this._coneDirection(direction, weapon.spreadAngle ?? 0.2)
+          : this._spreadDirection(direction, weapon.spread);
         const dragonHit = this._hitDragonManager(origin, pelletDirection, weapon, context.dragons, weapon.range);
         const hit = dragonHit ?? this._raycastHit(origin, pelletDirection, weapon.range, targets, context.ignore);
+        let endPoint;
         if (hit) {
           const payload = dragonHit
             ? this._buildDragonHitPayload(dragonHit, weapon, pelletDirection, origin, context)
             : this._buildHitPayload(hit, weapon, pelletDirection, origin, context);
           hits.push(payload);
           this._emit('onHit', payload);
+          endPoint = payload.point?.clone?.() ?? origin.clone().addScaledVector(pelletDirection, weapon.range);
+        } else {
+          endPoint = origin.clone().addScaledVector(pelletDirection, weapon.range);
         }
+        this._emit('onTracer', {
+          weapon,
+          origin: origin.clone(),
+          end: endPoint,
+          color: weapon.tracerColor ?? weapon.flashColor ?? 0xffe08a,
+        });
       }
     }
 
@@ -323,6 +344,29 @@ export class Weapons {
       .normalize();
   }
 
+  _coneDirection(direction, halfAngle) {
+    this._scratchRight.crossVectors(direction, UP);
+    if (this._scratchRight.lengthSq() < 0.0001) {
+      this._scratchRight.set(1, 0, 0);
+    } else {
+      this._scratchRight.normalize();
+    }
+
+    this._scratchUp.crossVectors(this._scratchRight, direction).normalize();
+
+    // Uniform sample inside the cone disc so pellets fan out evenly.
+    const theta = Math.random() * Math.PI * 2;
+    const radius = Math.sqrt(Math.random()) * Math.tan(halfAngle);
+    const x = Math.cos(theta) * radius;
+    const y = Math.sin(theta) * radius;
+
+    return direction
+      .clone()
+      .addScaledVector(this._scratchRight, x)
+      .addScaledVector(this._scratchUp, y)
+      .normalize();
+  }
+
   _raycastHit(origin, direction, range, targets, ignore) {
     const objects = this._normalizeTargets(targets).filter((target) => target !== ignore);
     if (objects.length === 0) return null;
@@ -377,6 +421,43 @@ export class Weapons {
     };
   }
 
+  _firePenetrating(origin, direction, weapon, context) {
+    const range = weapon.range;
+    let maxDistance = range;
+    let beamEnd = origin.clone().addScaledVector(direction, range);
+
+    const world = context.world;
+    if (world?.raycastBlock) {
+      const worldHit = world.raycastBlock(origin, direction, range);
+      if (worldHit) {
+        maxDistance = worldHit.distance;
+        beamEnd = (worldHit.point?.clone?.() ?? origin.clone().addScaledVector(direction, worldHit.distance));
+      }
+    }
+
+    const hits = [];
+    const dragons = context.dragons;
+    if (typeof dragons?.hitAllByRay === 'function') {
+      this.raycaster.set(origin, direction);
+      this.raycaster.near = 0;
+      this.raycaster.far = maxDistance;
+      for (const dragonHit of dragons.hitAllByRay(this.raycaster, weapon.damage)) {
+        const payload = this._buildDragonHitPayload(dragonHit, weapon, direction, origin, context);
+        hits.push(payload);
+        this._emit('onHit', payload);
+      }
+    }
+
+    this._emit('onBeam', {
+      weapon,
+      origin: origin.clone(),
+      end: beamEnd,
+      color: weapon.flashColor ?? 0x54d2ff,
+    });
+
+    return hits;
+  }
+
   _spawnMuzzleFlash(origin, direction, weapon, context) {
     const scene = context.scene;
     const ttl = context.flashDuration ?? 0.055;
@@ -407,30 +488,54 @@ export class Weapons {
 
   _spawnProjectile(origin, direction, weapon, context) {
     const scene = context.scene;
+    const speed = weapon.projectileSpeed ?? 48;
+    const start = origin.clone().addScaledVector(direction, 0.8);
     const projectile = {
       weapon,
-      position: origin.clone().addScaledVector(direction, 0.8),
-      previousPosition: origin.clone().addScaledVector(direction, 0.8),
-      direction: direction.clone(),
-      speed: weapon.projectileSpeed ?? 48,
+      position: start.clone(),
+      previousPosition: start.clone(),
+      velocity: direction.clone().multiplyScalar(speed),
+      gravity: weapon.gravity ?? 0,
       remainingRange: weapon.range,
       targets: context.targets,
       dragons: context.dragons,
+      world: context.world,
       ignore: context.ignore,
       scene,
       object: null,
     };
 
     if (scene?.add) {
-      const geometry = new THREE.SphereGeometry(weapon.projectileRadius ?? 0.1, 10, 10);
-      const material = new THREE.MeshBasicMaterial({ color: weapon.flashColor ?? 0x54d2ff });
-      projectile.object = new THREE.Mesh(geometry, material);
+      projectile.object = this._createProjectileMesh(weapon);
       projectile.object.position.copy(projectile.position);
       scene.add(projectile.object);
     }
 
     this.projectiles.push(projectile);
     this._emit('onProjectileSpawn', { weapon, projectile });
+  }
+
+  _createProjectileMesh(weapon) {
+    if (weapon.id === 'dagger' || weapon.projectileShape === 'dagger') {
+      const group = new THREE.Group();
+      const blade = new THREE.Mesh(
+        new THREE.BoxGeometry(0.05, 0.05, 0.34),
+        new THREE.MeshStandardMaterial({ color: 0xd7dee7, metalness: 0.8, roughness: 0.3, flatShading: true }),
+      );
+      blade.position.z = -0.1;
+      const handle = new THREE.Mesh(
+        new THREE.BoxGeometry(0.045, 0.045, 0.12),
+        new THREE.MeshStandardMaterial({ color: 0x4a342a, flatShading: true }),
+      );
+      handle.position.z = 0.12;
+      group.add(blade, handle);
+      group.frustumCulled = false;
+      return group;
+    }
+
+    const geometry = new THREE.SphereGeometry(weapon.projectileRadius ?? 0.1, 10, 10);
+    const material = new THREE.MeshBasicMaterial({ color: weapon.flashColor ?? 0x54d2ff });
+    return new THREE.Mesh(geometry, material);
   }
 
   _updateMuzzleFlashes(delta) {
@@ -456,51 +561,58 @@ export class Weapons {
   _updateProjectiles(delta) {
     for (let i = this.projectiles.length - 1; i >= 0; i -= 1) {
       const projectile = this.projectiles[i];
-      const distance = projectile.speed * delta;
 
+      if (projectile.gravity) {
+        projectile.velocity.y -= projectile.gravity * delta;
+      }
+
+      const step = this._scratchStep.copy(projectile.velocity).multiplyScalar(delta);
+      const distance = step.length();
       projectile.previousPosition.copy(projectile.position);
-      projectile.position.addScaledVector(projectile.direction, distance);
+      projectile.position.add(step);
       projectile.remainingRange -= distance;
+
+      const direction = this._scratchProjDir.copy(projectile.velocity);
+      if (direction.lengthSq() > 0) direction.normalize();
 
       const dragonHit = this._hitDragonManager(
         projectile.previousPosition,
-        projectile.direction,
+        direction,
         projectile.weapon,
         projectile.dragons,
         distance,
       );
       const hit = dragonHit ?? this._raycastHit(
         projectile.previousPosition,
-        projectile.direction,
+        direction,
         distance,
         projectile.targets,
         projectile.ignore,
       );
 
+      let worldHit = null;
+      if (!hit && typeof projectile.world?.raycastBlock === 'function') {
+        worldHit = projectile.world.raycastBlock(projectile.previousPosition, direction, distance);
+      }
+
       if (projectile.object) {
         projectile.object.position.copy(projectile.position);
+        if (direction.lengthSq() > 0) {
+          projectile.object.quaternion.setFromUnitVectors(PROJECTILE_FORWARD, direction);
+        }
       }
 
       if (hit) {
         const payload = dragonHit
-          ? this._buildDragonHitPayload(
-              dragonHit,
-              projectile.weapon,
-              projectile.direction,
-              projectile.previousPosition,
-              { projectile },
-            )
-          : this._buildHitPayload(
-              hit,
-              projectile.weapon,
-              projectile.direction,
-              projectile.previousPosition,
-              { projectile },
-            );
+          ? this._buildDragonHitPayload(dragonHit, projectile.weapon, direction, projectile.previousPosition, { projectile })
+          : this._buildHitPayload(hit, projectile.weapon, direction, projectile.previousPosition, { projectile });
         this._emit('onHit', payload);
         this._emit('onProjectileImpact', { ...payload, projectile });
         this._removeProjectile(i);
-      } else if (projectile.remainingRange <= 0) {
+      } else if (worldHit) {
+        this._emit('onProjectileImpact', { weapon: projectile.weapon, projectile, point: worldHit.point ?? projectile.position.clone() });
+        this._removeProjectile(i);
+      } else if (projectile.remainingRange <= 0 || projectile.position.y < -4) {
         this._emit('onProjectileExpire', { weapon: projectile.weapon, projectile });
         this._removeProjectile(i);
       }
@@ -510,8 +622,11 @@ export class Weapons {
   _removeProjectile(index) {
     const projectile = this.projectiles[index];
     projectile.scene?.remove?.(projectile.object);
-    projectile.object?.geometry?.dispose?.();
-    projectile.object?.material?.dispose?.();
+    projectile.object?.traverse?.((child) => {
+      child.geometry?.dispose?.();
+      if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose?.());
+      else child.material?.dispose?.();
+    });
     this.projectiles.splice(index, 1);
   }
 
