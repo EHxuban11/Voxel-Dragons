@@ -111,6 +111,7 @@ export class Player {
     this.isGrounded = false;
     this.isAlive = true;
     this.wallJumpCooldown = 0;
+    this.movementYaw = null; // when set, WASD uses this fixed yaw (top-down view)
 
     // Knight/Hunter parry guard (right click). While active, melee attackers
     // die and dragon fireballs are reflected back.
@@ -244,8 +245,11 @@ export class Player {
       );
     }
 
+    // While the movement basis is overridden (e.g. the hunter top-down view)
+    // mouse-look is ignored so the screen-aligned directions stay stable.
+    const lookLocked = this.movementYaw != null;
     const lookDelta = readLookDelta(input);
-    if (lookDelta.x || lookDelta.y) {
+    if (!lookLocked && (lookDelta.x || lookDelta.y)) {
       this.look(lookDelta.x, lookDelta.y);
     }
 
@@ -257,8 +261,9 @@ export class Player {
     const xAxis = readAxis(input, ['KeyD', 'd', 'right', 'moveRight'], ['KeyA', 'a', 'left', 'moveLeft']);
     const zAxis = readAxis(input, ['KeyW', 'w', 'forward', 'moveForward'], ['KeyS', 's', 'backward', 'moveBackward']);
 
-    FORWARD.set(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.cameraHolder.rotation.y);
-    RIGHT.set(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.cameraHolder.rotation.y);
+    const moveYaw = this.movementYaw != null ? this.movementYaw : this.cameraHolder.rotation.y;
+    FORWARD.set(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), moveYaw);
+    RIGHT.set(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), moveYaw);
     MOVE.copy(FORWARD).multiplyScalar(zAxis).addScaledVector(RIGHT, xAxis);
 
     if (MOVE.lengthSq() > 0) {

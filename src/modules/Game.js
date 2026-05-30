@@ -978,6 +978,9 @@ export class Game {
     this.aerialTimer = BALANCE.aerial.duration;
     this.aerialCenter.copy(this.player.object.position);
     this.player.invulnerable = true;
+    // Screen-aligned movement: the aerial camera is north-up (-Z), so WASD maps
+    // to screen directions (W = toward the top of the screen).
+    this.player.movementYaw = 0;
     this.activeCamera = this.aerialCamera;
     this.showAerialCircle();
   }
@@ -1019,6 +1022,7 @@ export class Game {
     this.aerialActive = false;
     this.activeCamera = this.camera;
     this.player.invulnerable = false;
+    this.player.movementYaw = null; // restore facing-relative movement
     this.aerialCooldown = BALANCE.aerial.cooldown;
     this.removeAerialCircle();
 
