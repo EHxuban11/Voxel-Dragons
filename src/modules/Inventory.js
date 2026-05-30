@@ -1,17 +1,18 @@
+// Duck guns in order: pistol, shotgun, rifle, blaster.
 const GUN_SLOTS = [
-  { kind: 'weapon', weaponIndex: 0, label: 'Rifle', count: null, color: '#ffd166' },
-  { kind: 'weapon', weaponIndex: 1, label: 'Shotgun', count: null, color: '#ff9f1c' },
-  { kind: 'weapon', weaponIndex: 2, label: 'Blaster', count: null, color: '#54d2ff' },
-  { kind: 'weapon', weaponIndex: 3, label: 'Pistola', count: null, color: '#fff0a0' },
+  { kind: 'weapon', weaponIndex: 3, label: 'Pistola', count: null, color: '#fff0a0', icon: 'pistol-bullet' },
+  { kind: 'weapon', weaponIndex: 1, label: 'Shotgun', count: null, color: '#ff9f1c', icon: 'shotgun-shell' },
+  { kind: 'weapon', weaponIndex: 0, label: 'Rifle', count: null, color: '#ffd166', icon: 'rifle-bullet' },
+  { kind: 'weapon', weaponIndex: 2, label: 'Blaster', count: null, color: '#54d2ff', icon: 'blue-laser' },
 ];
 
 const BLOCK_SLOTS = [
-  { kind: 'block', type: 'wood', label: 'Madera', count: 40, color: '#8a5a32' },
+  { kind: 'block', type: 'wood', label: 'Madera', count: 40, color: '#8a5a32', icon: 'wood' },
 ];
 
-const SWORD_SLOT = { kind: 'melee', model: 'sword', label: 'Espada', count: null, color: '#d7dde6' };
-const KATANA_SLOT = { kind: 'melee', model: 'katana', label: 'Katana', count: null, color: '#e8e2d0' };
-const DAGGER_SLOT = { kind: 'weapon', weaponIndex: 4, label: 'Daga', count: null, color: '#cfd6df' };
+const SWORD_SLOT = { kind: 'melee', model: 'sword', label: 'Espada', count: null, color: '#d7dde6', icon: 'sword' };
+const KATANA_SLOT = { kind: 'melee', model: 'katana', label: 'Katana', count: null, color: '#e8e2d0', icon: 'katana-sheathed' };
+const DAGGER_SLOT = { kind: 'weapon', weaponIndex: 4, label: 'Daga', count: null, color: '#cfd6df', icon: 'dagger' };
 
 function buildSlots(character) {
   if (character?.loadout === 'sword') {
@@ -23,17 +24,17 @@ function buildSlots(character) {
   if (character?.loadout === 'dagger') {
     return [
       { ...DAGGER_SLOT },
-      { kind: 'ability', abilityId: 'bomb', label: 'Bomba', count: 2, color: '#3b3b3b' },
-      { kind: 'ability', abilityId: 'aerial', label: 'ataque to guapo', count: null, color: '#66ccff' },
+      { kind: 'ability', abilityId: 'bomb', label: 'Bomba', count: 2, color: '#3b3b3b', icon: 'bomb' },
+      { kind: 'ability', abilityId: 'aerial', label: 'ataque to guapo', count: null, color: '#66ccff', icon: 'slash' },
     ];
   }
   if (character?.loadout === 'spells') {
     return [
-      { kind: 'ability', abilityId: 'fireball', label: 'Bola de fuego', count: null, color: '#ff6b1a' },
-      { kind: 'ability', abilityId: 'thunder', label: 'Rayo', count: null, color: '#ffe066' },
-      { kind: 'ability', abilityId: 'tornado', label: 'Tornado de fuego', count: null, color: '#ff9f1c' },
-      { kind: 'ability', abilityId: 'blizzard', label: 'Ventisca eterna', count: null, color: '#aee3ff' },
-      { kind: 'ability', abilityId: 'nuke', label: 'Nuke', count: null, color: '#ff3030' },
+      { kind: 'ability', abilityId: 'fireball', label: 'Bola de fuego', count: null, color: '#ff6b1a', icon: 'fireball' },
+      { kind: 'ability', abilityId: 'thunder', label: 'Rayo', count: null, color: '#ffe066', icon: 'thunder' },
+      { kind: 'ability', abilityId: 'tornado', label: 'Tornado de fuego', count: null, color: '#ff9f1c', icon: 'tornado' },
+      { kind: 'ability', abilityId: 'blizzard', label: 'Ventisca eterna', count: null, color: '#aee3ff', icon: 'snowball' },
+      { kind: 'ability', abilityId: 'nuke', label: 'Nuke', count: null, color: '#ff3030', icon: 'nuke' },
     ];
   }
   // Default (duck): guns plus buildable blocks.

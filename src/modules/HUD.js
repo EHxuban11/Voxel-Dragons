@@ -1,3 +1,5 @@
+import { getIcon } from './Icons.js';
+
 const DEFAULT_STATE = {
   health: 100,
   maxHealth: 100,
@@ -344,6 +346,14 @@ function injectStyles() {
       box-shadow: inset -8px -8px 0 rgba(0, 0, 0, 0.18), inset 5px 5px 0 rgba(255, 255, 255, 0.16);
     }
 
+    .vd-slot-swatch.has-icon {
+      background: rgba(20, 24, 30, 0.85);
+      background-size: 100% 100%;
+      background-repeat: no-repeat;
+      image-rendering: pixelated;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4);
+    }
+
     .vd-slot-key {
       position: absolute;
       left: 4px;
@@ -636,10 +646,17 @@ export class HUD {
   renderInventory(inventory) {
     if (!inventory?.slots) return;
 
+    const swatch = (slot) => {
+      const url = getIcon(slot.icon);
+      return url
+        ? `<div class="vd-slot-swatch has-icon" style="background-image:url(${url})"></div>`
+        : '<div class="vd-slot-swatch"></div>';
+    };
+
     this.nodes.hotbar.innerHTML = inventory.slots.map((slot, index) => `
       <div class="vd-slot ${index === inventory.selectedIndex ? 'is-selected' : ''}" style="--slot-color: ${slot.color}">
         <div class="vd-slot-key">${index + 1}</div>
-        <div class="vd-slot-swatch"></div>
+        ${swatch(slot)}
         <div class="vd-slot-count">${slot.count === null ? '' : slot.count}</div>
       </div>
     `).join('');
@@ -647,7 +664,7 @@ export class HUD {
     this.nodes.inventoryPanel.classList.toggle('is-open', Boolean(inventory.open));
     this.nodes.inventoryPanel.innerHTML = inventory.slots.map((slot) => `
       <div class="vd-inv-item" style="--slot-color: ${slot.color}">
-        <div class="vd-slot-swatch"></div>
+        ${swatch(slot)}
         <div>
           <div class="vd-inv-name">${slot.label}</div>
           <div>${slot.kind === 'block' ? `${slot.count} bloques` : 'Arma'}</div>

@@ -433,6 +433,10 @@ export class Game {
   }
 
   renderHud() {
+    // Samurai katana icon reflects whether the blade is drawn (buff active).
+    if (this.character.loadout === 'katana' && this.inventory.slots[0]) {
+      this.inventory.slots[0].icon = this.samuraiBuffActive ? 'katana-drawn' : 'katana-sheathed';
+    }
     const selectedSlot = this.inventory.selectedSlot;
     const isMelee = selectedSlot?.kind === 'melee';
     const weaponId = selectedSlot?.kind === 'weapon' ? this.weapons.currentWeapon?.id : null;
