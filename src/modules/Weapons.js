@@ -471,8 +471,9 @@ export class Weapons {
 
     if (scene?.add) {
       const color = weapon.flashColor ?? 0xffcc66;
-      const flash = new THREE.Group();
-      const light = new THREE.PointLight(color, 2.2, 3);
+      // No PointLight here: adding/removing lights forces Three to recompile
+      // every material (a big FPS hitch when firing). The emissive glow mesh
+      // alone reads as a muzzle flash.
       const geometry = new THREE.SphereGeometry(0.08, 8, 8);
       const material = new THREE.MeshBasicMaterial({
         color,
@@ -481,12 +482,10 @@ export class Weapons {
         depthWrite: false,
       });
       const glow = new THREE.Mesh(geometry, material);
-
-      flash.add(light, glow);
-      flash.position.copy(origin).addScaledVector(direction, context.muzzleDistance ?? 0.7);
-      scene.add(flash);
-      this.muzzleFlashes.push({ object: flash, material, scene, ttl, maxTtl: ttl });
-      payload.object = flash;
+      glow.position.copy(origin).addScaledVector(direction, context.muzzleDistance ?? 0.7);
+      scene.add(glow);
+      this.muzzleFlashes.push({ object: glow, material, scene, ttl, maxTtl: ttl });
+      payload.object = glow;
     }
 
     this._emit('onMuzzleFlash', payload);

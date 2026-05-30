@@ -39,6 +39,19 @@ export class Effects {
     this.scene = scene;
     this.effects = [];
     this.lights = [];
+    // Fixed pool of point lights kept in the scene the whole time. Reusing them
+    // (instead of add/remove) keeps the light count constant so Three never
+    // recompiles every material mid-game — that recompile was the FPS hitch.
+    this.lightPool = [];
+    this.lightCursor = 0;
+    if (scene) {
+      for (let i = 0; i < 6; i += 1) {
+        const light = new THREE.PointLight(0xffffff, 0, 10);
+        light.visible = false;
+        scene.add(light);
+        this.lightPool.push({ object: light, age: 0, ttl: 0, baseIntensity: 0, active: false });
+      }
+    }
     this.lastShakeOffset = new THREE.Vector3();
     this.shake = {
       time: 0,
@@ -316,14 +329,15 @@ export class Effects {
       }
     }
 
-    for (let i = this.lights.length - 1; i >= 0; i -= 1) {
-      const light = this.lights[i];
-      light.age += dt;
-      const progress = THREE.MathUtils.clamp(light.age / light.ttl, 0, 1);
-      light.object.intensity = light.baseIntensity * (1 - progress);
+    for (const entry of this.lightPool) {
+      if (!entry.active) continue;
+      entry.age += dt;
+      const progress = THREE.MathUtils.clamp(entry.age / entry.ttl, 0, 1);
+      entry.object.intensity = entry.baseIntensity * (1 - progress);
       if (progress >= 1) {
-        this.scene?.remove?.(light.object);
-        this.lights.splice(i, 1);
+        entry.object.intensity = 0;
+        entry.object.visible = false;
+        entry.active = false;
       }
     }
 
@@ -405,13 +419,14 @@ export class Effects {
     }
     this.effects.length = 0;
 
-    for (const light of this.lights) {
-      this.scene?.remove?.(light.object);
+    for (const entry of this.lightPool) {
+      this.scene?.remove?.(entry.object);
     }
-    this.lights.length = 0;
+    this.lightPool.length = 0;
   }
 
   _spawnBurst(config) {
+    if (this.effects.length > 90) return; // safety cap to avoid GC spikes on heavy multi-hits
     const positions = new Float32Array(config.count * 3);
     const colors = new Float32Array(config.count * 3);
     const velocities = [];
@@ -514,16 +529,18 @@ export class Effects {
   }
 
   _addLight(position, color, intensity, distance, ttl) {
-    if (!this.scene) return;
-    const light = new THREE.PointLight(color, intensity, distance);
-    light.position.copy(position);
-    this.scene.add(light);
-    this.lights.push({
-      object: light,
-      age: 0,
-      ttl,
-      baseIntensity: intensity,
-    });
+    if (this.lightPool.length === 0) return;
+    const entry = this.lightPool[this.lightCursor];
+    this.lightCursor = (this.lightCursor + 1) % this.lightPool.length;
+    entry.object.color.set(color);
+    entry.object.distance = distance;
+    entry.object.position.copy(position);
+    entry.object.intensity = intensity;
+    entry.object.visible = true;
+    entry.age = 0;
+    entry.ttl = ttl;
+    entry.baseIntensity = intensity;
+    entry.active = true;
   }
 
   _addShake(intensity, duration) {

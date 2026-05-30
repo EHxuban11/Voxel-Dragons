@@ -292,8 +292,8 @@ export const BALANCE = deepFreeze({
     throwRange: 22,
     throwCooldown: 2.4,
     potionSpeed: 14,
-    healRadius: 4,
-    healAmount: 14,
+    healRadius: 6, // 50% larger explosion
+    healAmount: 28, // double the heal
   },
 
   coins: {
