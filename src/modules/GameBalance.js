@@ -272,8 +272,19 @@ export const BALANCE = deepFreeze({
     dragonSize: 3.4,
   },
 
+  skeletons: {
+    health: 22, // less than a zombie (30); the fire tornado (24 total) kills them
+    speed: 3.0,
+    shootRange: 18,
+    shootCooldown: 2.0,
+    arrowSpeed: 24,
+    arrowDamage: 6,
+    reflectDamage: 30, // a guard-reflected arrow one-shots its shooter
+  },
+
   coins: {
     zombie: 2,
+    skeleton: 3,
     dragon: 5,
   },
 

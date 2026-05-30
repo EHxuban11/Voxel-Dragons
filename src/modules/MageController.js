@@ -10,8 +10,7 @@ export class MageController {
     this.scene = deps.scene;
     this.effects = deps.effects;
     this.world = deps.world;
-    this.zombies = deps.zombies;
-    this.dragons = deps.dragons;
+    this.enemies = deps.enemies;
     this.player = deps.player;
     this.camera = deps.camera;
     this.audio = deps.audio;
@@ -143,8 +142,7 @@ export class MageController {
   // --- 5. Nuke: huge AoE, then mana can't regen for a while -----------------
   castNuke(cfg) {
     const center = this.player.object.position.clone();
-    this.zombies.hitMelee(center, ANY_DIR, cfg.radius, cfg.damage, -1);
-    this.dragons.hitMelee(center, ANY_DIR, cfg.radius, cfg.damage, -1);
+    this.enemies.hitMelee(center, ANY_DIR, cfg.radius, cfg.damage, -1);
     this.effects.explosion(center);
     this.effects.shockwave(center.clone(), cfg.radius, 0xff5030);
     this.effects.shockwave(center.clone(), cfg.radius * 0.6, 0xffd060);
@@ -181,7 +179,7 @@ export class MageController {
       p.mesh.rotation.x += delta * 4;
       p.mesh.rotation.y += delta * 3;
 
-      const done = this._solid(p.position) || this._enemyNear(p.position, p.hitRadius) || p.life <= 0 || p.position.y < -4;
+      const done = this._solid(p.position) || this.enemies.anyNear(p.position, p.hitRadius) || p.life <= 0 || p.position.y < -4;
       if (done) {
         this.impact(p);
         this.scene.remove(p.mesh);
@@ -196,15 +194,12 @@ export class MageController {
     if (p.type === 'fire') {
       this.effects.explosion(p.position);
       this.audio.explosion();
-      this.zombies.hitMelee(p.position, ANY_DIR, p.radius, p.damage, -1);
-      this.dragons.hitMelee(p.position, ANY_DIR, p.radius, p.damage, -1);
+      this.enemies.hitMelee(p.position, ANY_DIR, p.radius, p.damage, -1);
     } else if (p.type === 'ice') {
       this.effects.shockwave(p.position.clone(), p.radius, 0x8fd3ff);
       this.effects.impact(p.position, 0xaee3ff);
-      this.zombies.hitMelee(p.position, ANY_DIR, p.radius, p.damage, -1);
-      this.dragons.hitMelee(p.position, ANY_DIR, p.radius, p.damage, -1);
-      this.zombies.slow(p.position, p.radius, p.slowFactor, p.slowDuration);
-      this.dragons.slow(p.position, p.radius, p.slowFactor, p.slowDuration);
+      this.enemies.hitMelee(p.position, ANY_DIR, p.radius, p.damage, -1);
+      this.enemies.slow(p.position, p.radius, p.slowFactor, p.slowDuration);
     }
   }
 
@@ -219,8 +214,7 @@ export class MageController {
         this.effects.beam(top, t.position, 0xbfe0ff);
         this.effects.explosion(t.position);
         this.audio.explosion();
-        this.zombies.hitMelee(t.position, ANY_DIR, t.radius, t.damage, -1);
-        this.dragons.hitMelee(t.position, ANY_DIR, t.radius, t.damage, -1);
+        this.enemies.hitMelee(t.position, ANY_DIR, t.radius, t.damage, -1);
         this.scene.remove(t.circle);
         t.circle.geometry.dispose();
         t.circle.material.dispose();
@@ -237,12 +231,11 @@ export class MageController {
       t.tickTimer -= delta;
       t.mesh.rotation.y += delta * 8;
 
-      this.zombies.tornadoPull(t.position, t.radius, t.elapsed);
+      this.enemies.tornadoPull(t.position, t.radius, t.elapsed);
 
       if (t.tickTimer <= 0) {
         t.tickTimer = t.tickRate;
-        this.zombies.hitMelee(t.position, ANY_DIR, t.radius, t.tickDamage, -1);
-        this.dragons.hitMelee(t.position, ANY_DIR, t.radius, t.tickDamage, -1);
+        this.enemies.hitMelee(t.position, ANY_DIR, t.radius, t.tickDamage, -1);
         this.effects.impact(t.position.clone().setY(t.position.y + 2), 0xff7a1a);
       }
 
@@ -259,16 +252,6 @@ export class MageController {
     if (!this.world?.getBlock) return false;
     const type = this.world.getBlock(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z));
     return Boolean(type) && type !== 'water';
-  }
-
-  _enemyNear(pos, radius) {
-    for (const z of this.zombies.zombies) {
-      if (!z.dead && pos.distanceTo(z.mesh.position) < radius) return true;
-    }
-    for (const d of this.dragons.dragons) {
-      if (!d.dead && pos.distanceTo(d.mesh.position) < radius) return true;
-    }
-    return false;
   }
 
   dispose() {

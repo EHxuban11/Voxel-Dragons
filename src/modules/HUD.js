@@ -9,6 +9,7 @@ const DEFAULT_STATE = {
   dragons: 0,
   dragonsTotal: null,
   zombies: 0,
+  skeletons: 0,
   wave: 1,
   waveCount: 10,
   coins: 0,
@@ -534,7 +535,7 @@ export class HUD {
       <div class="vd-wavebar" data-hud="wavebar"></div>
       <div class="vd-top-right">
         <div class="vd-topline"><span class="vd-heart" data-hud="heart">❤️</span><span class="vd-coins">🪙 <span data-hud="coins">0</span></span></div>
-        Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span>
+        Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span><br>Esqueletos: <span data-hud="skeletons">0</span>
       </div>
       <div class="vd-message" data-hud="message"></div>
       <div class="vd-deathscreen" data-hud="deathscreen">
@@ -567,6 +568,7 @@ export class HUD {
       weapon: this.root.querySelector('[data-hud="weapon"]'),
       dragons: this.root.querySelector('[data-hud="dragons"]'),
       zombies: this.root.querySelector('[data-hud="zombies"]'),
+      skeletons: this.root.querySelector('[data-hud="skeletons"]'),
       coins: this.root.querySelector('[data-hud="coins"]'),
       heart: this.root.querySelector('[data-hud="heart"]'),
       wavebar: this.root.querySelector('[data-hud="wavebar"]'),
@@ -616,6 +618,7 @@ export class HUD {
       : (maxAmmo > 0 ? `${ammo} / ${maxAmmo}` : String(ammo));
     this.nodes.dragons.textContent = dragons.total === null ? String(dragons.value) : `${dragons.value} / ${dragons.total}`;
     this.nodes.zombies.textContent = String(firstNumber(nextState, ['zombies'], DEFAULT_STATE.zombies));
+    this.nodes.skeletons.textContent = String(firstNumber(nextState, ['skeletons'], DEFAULT_STATE.skeletons));
     this.nodes.coins.textContent = String(firstNumber(nextState, ['coins'], DEFAULT_STATE.coins));
     this.nodes.heart.classList.toggle('is-used', !nextState.revive);
     this.nodes.guard.classList.toggle('is-active', Boolean(nextState.guard));

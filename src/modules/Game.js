@@ -4,6 +4,7 @@ import { Player } from './Player.js';
 import { Weapons } from './Weapons.js';
 import { DragonManager } from './DragonManager.js';
 import { ZombieManager } from './ZombieManager.js';
+import { SkeletonManager } from './SkeletonManager.js';
 import { Input } from './Input.js';
 import { HUD } from './HUD.js';
 import { Effects } from './Effects.js';
@@ -97,23 +98,32 @@ export class Game {
       spawnRadiusMin: BALANCE.zombies.spawnRadiusMin,
       spawnRadiusMax: BALANCE.zombies.spawnRadiusMax,
     });
+    this.skeletons = new SkeletonManager(this.scene, { bounds, world: this.world, ...BALANCE.skeletons });
 
-    // Gun shots resolve against the closest of either enemy manager.
-    this.enemyTargets = {
-      hitByRay: (ray, damage) => {
-        const dragonPeek = this.dragons.peekRay(ray);
-        const zombiePeek = this.zombies.peekRay(ray);
-        if (dragonPeek && (!zombiePeek || dragonPeek.distance <= zombiePeek.distance)) {
-          return this.dragons.applyRayHit(dragonPeek, damage);
+    // Aggregator that fans hits/effects out to every enemy manager.
+    const managers = [this.dragons, this.zombies, this.skeletons];
+    const lists = () => [this.dragons.dragons, this.zombies.zombies, this.skeletons.skeletons];
+    this.enemies = {
+      managers,
+      hitMelee: (o, d, r, dmg, arc) => managers.flatMap((m) => m.hitMelee(o, d, r, dmg, arc)),
+      hitBox: (o, f, ri, l, hw, dmg) => managers.flatMap((m) => m.hitBox(o, f, ri, l, hw, dmg)),
+      knockback: (c, r, f) => managers.forEach((m) => m.knockback(c, r, f, this.world)),
+      slow: (c, r, fac, dur) => managers.forEach((m) => m.slow(c, r, fac, dur)),
+      tornadoPull: (c, r, e) => { this.zombies.tornadoPull(c, r, e); this.skeletons.tornadoPull(c, r, e); },
+      hitAllByRay: (ray, dmg) => managers.flatMap((m) => m.hitAllByRay(ray, dmg)),
+      hitByRay: (ray, dmg) => {
+        let best = null;
+        let bestMgr = null;
+        for (const m of managers) {
+          const peek = m.peekRay(ray);
+          if (peek && (!best || peek.distance < best.distance)) { best = peek; bestMgr = m; }
         }
-        if (zombiePeek) return this.zombies.applyRayHit(zombiePeek, damage);
-        return null;
+        return best ? bestMgr.applyRayHit(best, dmg) : null;
       },
-      hitAllByRay: (ray, damage) => [
-        ...this.dragons.hitAllByRay(ray, damage),
-        ...this.zombies.hitAllByRay(ray, damage),
-      ],
+      anyNear: (pos, radius) => lists().some((list) => list.some((e) => !e.dead && pos.distanceTo(e.mesh.position) < radius)),
+      aliveCount: () => managers.reduce((sum, m) => sum + m.getAliveCount(), 0),
     };
+    this.enemyTargets = this.enemies; // weapons use hitByRay/hitAllByRay
 
     this.hud = new HUD(this.root);
     this.started = false;
@@ -154,7 +164,7 @@ export class Game {
     this.mage = this.character.loadout === 'spells'
       ? new MageController({
           scene: this.scene, effects: this.effects, world: this.world,
-          zombies: this.zombies, dragons: this.dragons, player: this.player,
+          enemies: this.enemies, player: this.player,
           camera: this.camera, audio: this.audio, hud: this.hud,
         })
       : null;
@@ -222,8 +232,11 @@ export class Game {
       this.openShop();
     }
 
-    this.dragons.spawnWave(this.wave);
-    this.zombies.spawnWave(this.wave, this.player, this.world);
+    // Lots of zombies (increasing), fewer skeletons, fewest dragons.
+    const w = this.wave;
+    this.zombies.spawnWave(2 + w, this.player, this.world);
+    this.skeletons.spawnWave(Math.ceil(w * 0.6), this.player, this.world);
+    this.dragons.spawnWave(Math.max(1, Math.ceil(w * 0.3)));
     this.hud.showMessage(`Oleada ${this.wave}`, 1500);
   }
 
@@ -294,7 +307,9 @@ export class Game {
       this.world.update(delta);
       this.dragons.update(delta, this.player, this.scene);
       this.zombies.update(delta, this.player, this.world);
+      this.skeletons.update(delta, this.player, this.world);
       this.handleZombieEvents();
+      this.handleSkeletonArrows();
       this.handleDragonFireballs(delta);
       this.updateBombs(delta);
       this.weapons.update(delta);
@@ -350,6 +365,7 @@ export class Game {
       } else {
         this.dragons.clearDragons();
         this.zombies.clearZombies();
+        this.skeletons.clearSkeletons();
       }
     }
 
@@ -359,13 +375,16 @@ export class Game {
     if (this.mage) this.mage.update(delta); // before enemies so the tornado can lift them
     this.dragons.update(delta, this.player, this.scene);
     this.zombies.update(delta, this.player, this.world);
+    this.skeletons.update(delta, this.player, this.world);
     this.handleZombieEvents();
+    this.handleSkeletonArrows();
 
     // Coins are earned by killing enemies.
     this.coins += this.dragons.consumeKills() * BALANCE.coins.dragon
-      + this.zombies.consumeKills() * BALANCE.coins.zombie;
+      + this.zombies.consumeKills() * BALANCE.coins.zombie
+      + this.skeletons.consumeKills() * BALANCE.coins.skeleton;
 
-    if (!this.victory && this.dragons.getAliveCount() === 0 && this.zombies.getAliveCount() === 0) {
+    if (!this.victory && this.enemies.aliveCount() === 0) {
       this.advanceWave();
     }
     this.weapons.update(delta);
@@ -433,6 +452,7 @@ export class Game {
       dragons: this.dragons.getAliveCount(),
       dragonsTotal: this.dragons.dragons.length,
       zombies: this.zombies.getAliveCount(),
+      skeletons: this.skeletons.getAliveCount(),
       coins: this.coins,
       revive: this.hasRevive,
       guard: this.player.guardActive,
@@ -464,6 +484,7 @@ export class Game {
 
   enterTrainingGround() {
     this.dragons.clearDragons();
+    this.skeletons.clearSkeletons();
 
     // Flat arena, then place the player and the practice targets.
     this.world.generateFlat(5);
@@ -564,8 +585,8 @@ export class Game {
     }
   }
 
-  applyMeleeHits(zombieHits, dragonHits, color = 0xffffff, sizeMult = 1) {
-    for (const hit of zombieHits) {
+  applyMeleeHits(groundHits, dragonHits, color = 0xffffff, sizeMult = 1) {
+    for (const hit of groundHits) {
       this.effects.slashMark(hit.position, BALANCE.slash.zombieSize * sizeMult, color);
       if (hit.killed) {
         this.effects.explosion(hit.position);
@@ -597,9 +618,12 @@ export class Game {
 
     const origin = this.getCameraWorldPosition();
     const direction = this.getLookDirection();
-    const zombieHits = this.zombies.hitMelee(origin, direction, range, damage, arcCos);
+    const groundHits = [
+      ...this.zombies.hitMelee(origin, direction, range, damage, arcCos),
+      ...this.skeletons.hitMelee(origin, direction, range, damage, arcCos),
+    ];
     const dragonHits = this.dragons.hitMelee(origin, direction, range, damage, arcCos);
-    this.applyMeleeHits(zombieHits, dragonHits, color, sizeMult);
+    this.applyMeleeHits(groundHits, dragonHits, color, sizeMult);
   }
 
   getForwardHorizontal() {
@@ -673,8 +697,7 @@ export class Game {
     this.samuraiBuffTimer = BALANCE.katana.buffDuration;
 
     const center = this.player.object.position;
-    this.zombies.knockback(center, BALANCE.katana.parryRadius, BALANCE.katana.parryKnockback, this.world);
-    this.dragons.knockback(center, BALANCE.katana.parryRadius, BALANCE.katana.parryKnockback);
+    this.enemies.knockback(center, BALANCE.katana.parryRadius, BALANCE.katana.parryKnockback);
 
     this.effects.shockwave(center.clone(), BALANCE.katana.parryRadius, 0x9fd0ff);
     this.audio.explosion();
@@ -697,8 +720,7 @@ export class Game {
     this.player.lastMoveDir.copy(forward);
     this.player.startDash(length, k.dashSpeed);
 
-    this.zombies.hitBox(origin, forward, right, length, halfWidth, damage);
-    this.dragons.hitBox(origin, forward, right, length, halfWidth, damage);
+    this.enemies.hitBox(origin, forward, right, length, halfWidth, damage);
 
     const slashes = Math.round(length * 4);
     for (let i = 0; i < slashes; i += 1) {
@@ -734,9 +756,12 @@ export class Game {
     const { sweepRange, sweepArcCos, sweepDamageMult } = BALANCE.sword;
     const damage = this.meleeDamage * sweepDamageMult;
 
-    const zombieHits = this.zombies.hitMelee(origin, direction, sweepRange, damage, sweepArcCos);
+    const groundHits = [
+      ...this.zombies.hitMelee(origin, direction, sweepRange, damage, sweepArcCos),
+      ...this.skeletons.hitMelee(origin, direction, sweepRange, damage, sweepArcCos),
+    ];
     const dragonHits = this.dragons.hitMelee(origin, direction, sweepRange, damage, sweepArcCos);
-    this.applyMeleeHits(zombieHits, dragonHits, 0x4aa0ff, 1.4);
+    this.applyMeleeHits(groundHits, dragonHits, 0x4aa0ff, 1.4);
 
     // Big blue slash in the look direction.
     const center = this.player.object.position.clone();
@@ -753,9 +778,12 @@ export class Game {
     const damage = this.meleeDamage * aoeDamageMult;
 
     // arcCos of -1 makes the hit ignore direction (full 360° circle).
-    const zombieHits = this.zombies.hitMelee(origin, direction, aoeRadius, damage, -1);
+    const groundHits = [
+      ...this.zombies.hitMelee(origin, direction, aoeRadius, damage, -1),
+      ...this.skeletons.hitMelee(origin, direction, aoeRadius, damage, -1),
+    ];
     const dragonHits = this.dragons.hitMelee(origin, direction, aoeRadius, damage, -1);
-    this.applyMeleeHits(zombieHits, dragonHits, 0xffffff, 1.2);
+    this.applyMeleeHits(groundHits, dragonHits, 0xffffff, 1.2);
 
     const center = this.player.object.position.clone();
     center.y += 0.2;
@@ -933,8 +961,7 @@ export class Game {
     this.audio.explosion();
 
     const dir = new THREE.Vector3(1, 0, 0);
-    this.zombies.hitMelee(center, dir, radius, damage, -1);
-    this.dragons.hitMelee(center, dir, radius, damage, -1);
+    this.enemies.hitMelee(center, dir, radius, damage, -1);
 
     if (this.player.object.position.distanceTo(center) <= radius) {
       this.player.damage(playerDamage);
@@ -996,8 +1023,7 @@ export class Game {
     this.removeAerialCircle();
 
     const dir = new THREE.Vector3(1, 0, 0);
-    this.zombies.hitMelee(this.aerialCenter, dir, BALANCE.aerial.radius, BALANCE.aerial.damage, -1);
-    this.dragons.hitMelee(this.aerialCenter, dir, BALANCE.aerial.radius, BALANCE.aerial.damage, -1);
+    this.enemies.hitMelee(this.aerialCenter, dir, BALANCE.aerial.radius, BALANCE.aerial.damage, -1);
     this.audio.explosion();
     this.slashTimer = BALANCE.aerial.slashDuration;
   }
@@ -1069,6 +1095,22 @@ export class Game {
     }
   }
 
+  handleSkeletonArrows() {
+    for (const arrow of this.skeletons.consumeImpacts()) {
+      this.effects.impact(arrow.position, 0xe8e6dc);
+      if (arrow.hitPlayer && arrow.damage > 0) {
+        if (this.parryWindowTimer > 0 && !this.samuraiBuffActive) {
+          this.samuraiParrySuccess();
+          continue;
+        }
+        if (this.player.invulnerable) continue;
+        this.player.damage(arrow.damage);
+        this.hud.flashDamage();
+        this.audio.damage();
+      }
+    }
+  }
+
   getLookDirection() {
     return this.camera.getWorldDirection(new THREE.Vector3());
   }
@@ -1115,6 +1157,7 @@ export class Game {
     this.bombs.length = 0;
     this.dragons.dispose?.();
     this.zombies.dispose?.();
+    this.skeletons.dispose?.();
     this.world.dispose?.();
     if (this.viewmodel) {
       this.camera.remove(this.viewmodel);
