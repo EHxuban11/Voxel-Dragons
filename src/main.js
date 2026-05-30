@@ -5,8 +5,12 @@ import { CHARACTERS } from './modules/Characters.js';
 
 const root = document.querySelector('#app');
 
-const menu = new Menu(root, CHARACTERS, (character) => {
-  menu.hide();
-  const game = new Game(root, { character });
-  game.start();
-});
+function showMenu() {
+  const menu = new Menu(root, CHARACTERS, (character) => {
+    menu.hide();
+    const game = new Game(root, { character, onExit: showMenu });
+    game.start();
+  });
+}
+
+showMenu();

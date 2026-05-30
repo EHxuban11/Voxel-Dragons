@@ -161,6 +161,7 @@ export class World extends THREE.Group {
     }
 
     this.generateTrees();
+    this.buildLandmarks();
     this.rebuildMeshes();
   }
 
@@ -174,18 +175,117 @@ export class World extends THREE.Group {
         if (hash2D(x * 3, z * 3, seed + 91) > 0.985) {
           const y = this.getSurfaceY(x, z);
           if (y === null || y < waterLevel || this.getBlock(x, y, z) !== 'grass') continue;
-          for (let trunk = 1; trunk <= 4; trunk += 1) {
-            this.setBlock(x, y + trunk, z, 'wood', false);
+          this.plantTree(x, y, z);
+        }
+      }
+    }
+  }
+
+  plantTree(x, baseY, z) {
+    for (let trunk = 1; trunk <= 4; trunk += 1) {
+      this.setBlock(x, baseY + trunk, z, 'wood', false);
+    }
+    for (let lx = -2; lx <= 2; lx += 1) {
+      for (let ly = 3; ly <= 5; ly += 1) {
+        for (let lz = -2; lz <= 2; lz += 1) {
+          if (Math.abs(lx) + Math.abs(lz) + Math.max(0, ly - 4) <= 4) {
+            this.setBlock(x + lx, baseY + ly, z + lz, 'leaves', false);
           }
-          for (let lx = -2; lx <= 2; lx += 1) {
-            for (let ly = 3; ly <= 5; ly += 1) {
-              for (let lz = -2; lz <= 2; lz += 1) {
-                if (Math.abs(lx) + Math.abs(lz) + Math.max(0, ly - 4) <= 4) {
-                  this.setBlock(x + lx, y + ly, z + lz, 'leaves', false);
-                }
-              }
-            }
+        }
+      }
+    }
+  }
+
+  clearColumn(x, z) {
+    const ix = Math.floor(x);
+    const iz = Math.floor(z);
+    for (let y = 0; y < this.options.maxHeight; y += 1) {
+      this.blocks.delete(blockKey(ix, y, iz));
+    }
+  }
+
+  buildLandmarks() {
+    const { waterLevel } = this.options;
+    const plateauTop = waterLevel + 2;
+    const plateauRadius = 13;
+    const moatOuter = 17;
+    const castleHalf = 8;
+
+    for (let x = -moatOuter - 1; x <= moatOuter + 1; x += 1) {
+      for (let z = -moatOuter - 1; z <= moatOuter + 1; z += 1) {
+        const distance = Math.hypot(x, z);
+        if (distance <= plateauRadius) {
+          // Flat grass plateau for the castle to sit on.
+          this.clearColumn(x, z);
+          for (let y = 0; y <= plateauTop; y += 1) {
+            let type = 'stone';
+            if (y === plateauTop) type = 'grass';
+            else if (y >= plateauTop - 2) type = 'dirt';
+            this.setBlock(x, y, z, type, false);
           }
+        } else if (distance <= moatOuter) {
+          // Water moat / small lake ringing the castle.
+          this.clearColumn(x, z);
+          const bed = waterLevel - 3;
+          for (let y = 0; y <= bed; y += 1) {
+            this.setBlock(x, y, z, y >= bed - 1 ? 'sand' : 'stone', false);
+          }
+          for (let y = bed + 1; y <= waterLevel; y += 1) {
+            this.setBlock(x, y, z, 'water', false);
+          }
+        }
+      }
+    }
+
+    this.buildCastle(castleHalf, plateauTop);
+    this.buildForest();
+  }
+
+  buildCastle(half, base) {
+    const wallHeight = 5;
+    const towerHeight = 8;
+
+    // Outer walls with a south gate gap and battlements.
+    for (let x = -half; x <= half; x += 1) {
+      for (let z = -half; z <= half; z += 1) {
+        const onPerimeter = Math.abs(x) === half || Math.abs(z) === half;
+        if (!onPerimeter) continue;
+        if (z === half && Math.abs(x) <= 1) continue; // gate
+        for (let h = 1; h <= wallHeight; h += 1) {
+          if (h === wallHeight && ((x + z) & 1) === 1) continue; // crenellations
+          this.setBlock(x, base + h, z, 'stone', false);
+        }
+      }
+    }
+
+    // Taller 3x3 corner towers.
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const cx = sx * half;
+      const cz = sz * half;
+      for (let dx = -1; dx <= 1; dx += 1) {
+        for (let dz = -1; dz <= 1; dz += 1) {
+          const ring = Math.abs(dx) === 1 || Math.abs(dz) === 1;
+          for (let h = 1; h <= towerHeight; h += 1) {
+            if (!ring && h < towerHeight) continue; // hollow inside
+            if (h === towerHeight && ((dx + dz) & 1) === 1) continue;
+            this.setBlock(cx + dx, base + h, cz + dz, 'stone', false);
+          }
+        }
+      }
+    }
+  }
+
+  buildForest() {
+    const { width, depth, waterLevel, seed } = this.options;
+    const centerX = -Math.floor(width / 4);
+    const centerZ = Math.floor(depth / 4);
+
+    for (let x = centerX - 7; x <= centerX + 7; x += 1) {
+      for (let z = centerZ - 7; z <= centerZ + 7; z += 1) {
+        if (hash2D(x * 7, z * 7, seed + 313) > 0.76) {
+          const y = this.getSurfaceY(x, z);
+          if (y === null || y < waterLevel || this.getBlock(x, y, z) !== 'grass') continue;
+          this.plantTree(x, y, z);
         }
       }
     }
@@ -202,7 +302,7 @@ export class World extends THREE.Group {
           if (Math.abs(x) !== radius && Math.abs(z) !== radius) continue;
 
           const y = this.getSurfaceY(x, z);
-          if (y !== null && y >= waterLevel && this.getBlock(x, y, z) !== 'water') {
+          if (y !== null && y >= waterLevel && this.getBlock(x, y, z) === 'grass') {
             best = new THREE.Vector3(x + 0.5, y + 2.2, z + 0.5);
             return best;
           }

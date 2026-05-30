@@ -11,12 +11,14 @@ import { GameAudio } from './Audio.js';
 import { Inventory } from './Inventory.js';
 import { CHARACTERS } from './Characters.js';
 import { buildViewmodel, disposeViewmodel } from './Viewmodels.js';
+import { Shop } from './Shop.js';
 import { BALANCE } from './GameBalance.js';
 
 export class Game {
   constructor(root, options = {}) {
     this.root = root;
     this.character = options.character ?? CHARACTERS[0];
+    this.onExit = options.onExit ?? null;
     this.clock = new THREE.Clock();
     this.scene = new THREE.Scene();
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -29,9 +31,15 @@ export class Game {
     this.input = new Input({ target: this.renderer.domElement });
     this.audio = new GameAudio();
     this.effects = new Effects(this.scene);
+    this.effects.camera = this.camera; // for camera-facing slash marks
     this.inventory = new Inventory(this.character);
     this.world = new World(BALANCE.world);
-    this.player = new Player(this.camera, BALANCE.player);
+    this.player = new Player(this.camera, {
+      ...BALANCE.player,
+      maxHealth: this.character.health,
+      maxShield: this.character.shield,
+      moveSpeed: BALANCE.player.moveSpeed * (this.character.speedMult ?? 1),
+    });
     this.player.setPosition(...this.world.getSpawnPoint().toArray());
     this.weapons = new Weapons({
       camera: this.camera,
@@ -39,14 +47,19 @@ export class Game {
       weapons: BALANCE.weapons,
       callbacks: {
         onHit: (hit) => {
-          if (hit.point) this.effects.impact(hit.point, hit.weapon?.flashColor ?? 0xffd166);
+          if (hit.weapon?.id === 'dagger' && hit.point) {
+            // Daggers leave the same slash mark as the sword.
+            this.effects.slashMark(hit.point, hit.dragon ? BALANCE.slash.dragonSize : BALANCE.slash.zombieSize);
+          } else if (hit.point) {
+            this.effects.impact(hit.point, hit.weapon?.flashColor ?? 0xffd166);
+          }
           if (hit.killed) {
             this.effects.explosion(hit.point);
             this.audio.explosion();
           }
         },
         onProjectileImpact: (hit) => {
-          if (hit.point) this.effects.explosion(hit.point);
+          if (hit.point) this.effects.impact(hit.point, hit.weapon?.flashColor ?? 0xcfd6df);
         },
         onBeam: (beam) => {
           this.effects.beam(beam.origin, beam.end, beam.color);
@@ -97,23 +110,79 @@ export class Game {
     };
 
     this.hud = new HUD(this.root);
-    this.paused = false;
     this.started = false;
+    this.state = 'playing'; // 'playing' | 'shop' | 'dead'
     this.wave = 0;
     this.meleeCooldown = 0;
     this.guardCooldown = 0;
+    this.dashCooldown = 0;
+    this.swordCharging = false;
+    this.swordCharge = 0;
+    this.viewmodel = null;
+
+    // Run progression / economy.
+    this.coins = 0;
+    this.hasRevive = true; // the heart; consumed on first death
+    this.buffs = { damage: 0, speed: 0, health: 0, shield: 0 };
+    this.meleeDamage = BALANCE.sword.damage;
+    this.shop = null;
+    this.shopDone = false;
+    this.victory = false;
+    this.deathTimer = 0;
+
+    // The player cannot leave the map (invisible barrier at the edges).
+    this.playerBounds = {
+      minX: -BALANCE.world.width / 2 + 1,
+      maxX: BALANCE.world.width / 2 - 1,
+      minZ: -BALANCE.world.depth / 2 + 1,
+      maxZ: BALANCE.world.depth / 2 - 1,
+    };
+
     this.targetOutline = this.createTargetOutline();
 
     this.scene.add(this.world);
     this.scene.add(this.player.object);
     this.scene.add(this.targetOutline);
+    this.addBoundaryBarrier();
     this.setupScene();
     this.bindEvents();
+    this.onSelectionChanged();
     this.startNextWave();
+  }
+
+  grantWaveAmmo() {
+    for (const [name, amount] of Object.entries(BALANCE.progression.waveAmmo)) {
+      this.weapons.addAmmo(name, amount);
+    }
+  }
+
+  addBoundaryBarrier() {
+    const { minX, maxX, minZ, maxZ } = this.playerBounds;
+    const width = maxX - minX;
+    const depth = maxZ - minZ;
+    const geometry = new THREE.BoxGeometry(width, 60, depth);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x6fc3ff,
+      transparent: true,
+      opacity: 0.08,
+      side: THREE.BackSide,
+      depthWrite: false,
+    });
+    const barrier = new THREE.Mesh(geometry, material);
+    barrier.position.set((minX + maxX) / 2, 18, (minZ + maxZ) / 2);
+    this.scene.add(barrier);
   }
 
   startNextWave() {
     this.wave += 1;
+
+    // The shop opens once, right before the configured wave, and that is also
+    // where you are handed reserve ammo for the guns.
+    if (this.wave === BALANCE.progression.shopWave && !this.shopDone) {
+      this.grantWaveAmmo();
+      this.openShop();
+    }
+
     this.dragons.spawnWave(this.wave);
     this.zombies.spawnWave(this.wave, this.player, this.world);
     this.hud.showMessage(`Oleada ${this.wave}`, 1500);
@@ -151,8 +220,28 @@ export class Game {
   tick() {
     const delta = Math.min(this.clock.getDelta(), 0.05);
 
+    // Death screen: everything is frozen; return to the menu after 3 seconds.
+    if (this.state === 'dead') {
+      this.deathTimer -= delta;
+      if (this.deathTimer <= 0) {
+        this.exitToMenu();
+        return;
+      }
+      this.renderer.render(this.scene, this.camera);
+      this.input.update();
+      return;
+    }
+
+    // Shop is open: the run is paused while buffs are purchased.
+    if (this.state === 'shop') {
+      this.renderer.render(this.scene, this.camera);
+      this.input.update();
+      return;
+    }
+
     this.meleeCooldown = Math.max(0, this.meleeCooldown - delta);
     this.guardCooldown = Math.max(0, this.guardCooldown - delta);
+    this.dashCooldown = Math.max(0, this.dashCooldown - delta);
     this.player.updateGuard(delta);
 
     if (this.input.consume('reload')) {
@@ -164,83 +253,198 @@ export class Game {
     }
     if (this.input.consume('weaponNext')) {
       this.inventory.next();
-      this.syncSelectedWeapon();
+      this.onSelectionChanged();
     }
     if (this.input.consume('weaponPrev')) {
       this.inventory.previous();
-      this.syncSelectedWeapon();
+      this.onSelectionChanged();
     }
     for (let i = 1; i <= this.inventory.slots.length; i += 1) {
       if (this.input.consume(`weapon${i}`)) {
         this.inventory.select(i - 1);
-        this.syncSelectedWeapon();
+        this.onSelectionChanged();
       }
     }
+    // Right click and the F key both trigger the character's secondary action.
     if (this.input.consume('alternate')) {
-      if (this.character.ability === 'guard') {
-        this.activateGuard();
-      } else {
-        this.placeSelectedBlock();
-      }
+      this.useSecondaryAction();
     }
-    if (this.input.consume('use')) {
-      this.mineTargetBlock();
+    // Debug: P clears the round's enemies, jumping to the next wave.
+    if (this.input.consume('debugSkipWave')) {
+      this.dragons.clearDragons();
+      this.zombies.clearZombies();
     }
 
     this.player.update(delta, this.input, this.world);
+    this.clampPlayerToBounds();
     this.world.update(delta);
     this.dragons.update(delta, this.player, this.scene);
     this.zombies.update(delta, this.player, this.world);
     this.handleZombieEvents();
 
-    if (this.dragons.getAliveCount() === 0 && this.zombies.getAliveCount() === 0) {
-      this.startNextWave();
+    // Coins are earned by killing enemies.
+    this.coins += this.dragons.consumeKills() * BALANCE.coins.dragon
+      + this.zombies.consumeKills() * BALANCE.coins.zombie;
+
+    if (!this.victory && this.dragons.getAliveCount() === 0 && this.zombies.getAliveCount() === 0) {
+      this.advanceWave();
     }
     this.weapons.update(delta);
     this.effects.update(delta);
 
+    // Left click and the E key both attack.
     const attackClicked = this.input.consume('attack');
-    if (this.input.pointerLocked && this.input.isDown('Mouse0')) {
-      const slot = this.inventory.selectedSlot;
-      if (slot?.kind === 'weapon') {
+    const attacking = this.input.pointerLocked && (this.input.isDown('Mouse0') || this.input.isDown('KeyE'));
+    const attackSlot = this.inventory.selectedSlot;
+    if (attackSlot?.kind === 'melee') {
+      // Knight sword: hold to charge a stronger attack, release to swing.
+      if (attacking) {
+        this.swordCharging = true;
+        this.swordCharge += delta;
+      } else if (this.swordCharging) {
+        this.releaseSwordAttack(this.swordCharge);
+        this.swordCharging = false;
+        this.swordCharge = 0;
+      }
+      this.updateSwordChargeVisual();
+    } else if (attacking) {
+      if (attackSlot?.kind === 'weapon') {
         this.handleFire();
-      } else if (slot?.kind === 'melee') {
-        this.meleeAttack();
       }
     }
-    if (this.input.pointerLocked && attackClicked && this.inventory.selectedSlot?.kind === 'block') {
+    if (this.input.pointerLocked && attackClicked && attackSlot?.kind === 'block') {
       this.mineTargetBlock();
     }
 
     this.handleDragonFireballs(delta);
 
     if (!this.player.isAlive) {
-      this.respawnPlayer();
+      this.handlePlayerDeath();
     }
 
     this.updateTargetOutline();
     this.effects.applyCameraShake(this.camera);
     const selectedSlot = this.inventory.selectedSlot;
     const isMelee = selectedSlot?.kind === 'melee';
+    const weaponId = selectedSlot?.kind === 'weapon' ? this.weapons.currentWeapon?.id : null;
+    const isGun = Boolean(weaponId) && weaponId !== 'dagger';
+    const ammoState = this.weapons.getAmmoState(true);
     this.hud.update({
       health: this.player.health,
       maxHealth: this.player.maxHealth,
       shield: this.player.shield,
       maxShield: this.player.maxShield,
-      ammo: isMelee ? { ammo: 0, maxAmmo: 0 } : this.weapons.getAmmoState(true),
-      ammoText: isMelee ? '∞' : null,
+      ammo: ammoState,
+      // Only the duck's guns show ammo (clip / reserve). Sword and dagger hide it.
+      ammoText: isGun ? `${ammoState.ammo} / ${ammoState.reserveAmmo}` : '',
       weapon: isMelee ? selectedSlot.label : this.weapons.getCurrentWeaponName(),
       dragons: this.dragons.getAliveCount(),
       dragonsTotal: this.dragons.dragons.length,
       zombies: this.zombies.getAliveCount(),
+      coins: this.coins,
+      revive: this.hasRevive,
       guard: this.player.guardActive,
       wave: this.wave,
+      waveCount: BALANCE.progression.waveCount,
       inventory: this.inventory.snapshot(),
       locked: this.input.pointerLocked
     });
 
     this.renderer.render(this.scene, this.camera);
     this.input.update();
+  }
+
+  clampPlayerToBounds() {
+    const pos = this.player.object.position;
+    pos.x = THREE.MathUtils.clamp(pos.x, this.playerBounds.minX, this.playerBounds.maxX);
+    pos.z = THREE.MathUtils.clamp(pos.z, this.playerBounds.minZ, this.playerBounds.maxZ);
+  }
+
+  advanceWave() {
+    if (this.wave >= BALANCE.progression.waveCount) {
+      this.triggerVictory();
+      return;
+    }
+    this.startNextWave();
+  }
+
+  triggerVictory() {
+    this.victory = true;
+    this.hud.showMessage('¡Has ganado! 🎉', 6000);
+  }
+
+  handlePlayerDeath() {
+    if (this.hasRevive) {
+      // First death: the heart greys out and you respawn normally.
+      this.hasRevive = false;
+      this.respawnPlayer();
+    } else {
+      // Second death: game over.
+      this.triggerGameOver();
+    }
+  }
+
+  triggerGameOver() {
+    this.state = 'dead';
+    this.deathTimer = 3;
+    this.hud.showDeathScreen();
+    this.input.exitPointerLock();
+  }
+
+  exitToMenu() {
+    if (this._exited) return;
+    this._exited = true;
+    this.dispose();
+    this.onExit?.();
+  }
+
+  openShop() {
+    this.state = 'shop';
+    this.input.exitPointerLock();
+    this.shop = new Shop(this.root, {
+      items: BALANCE.shop.items,
+      getCoins: () => this.coins,
+      getOwned: (id) => this.buffs[id] ?? 0,
+      onBuy: (item) => this.buyBuff(item),
+      onClose: () => this.closeShop(),
+    });
+  }
+
+  closeShop() {
+    this.shop?.hide?.();
+    this.shop = null;
+    this.shopDone = true;
+    this.state = 'playing';
+  }
+
+  buyBuff(item) {
+    if (this.coins < item.cost) return false;
+    this.coins -= item.cost;
+    this.buffs[item.id] = (this.buffs[item.id] ?? 0) + 1;
+    this.applyBuff(item.id);
+    return true;
+  }
+
+  applyBuff(id) {
+    switch (id) {
+      case 'damage':
+        this.weapons.scaleDamage(1.25);
+        this.meleeDamage *= 1.25;
+        break;
+      case 'speed':
+        this.player.config.moveSpeed *= 1.15;
+        break;
+      case 'health':
+        this.player.maxHealth += 40;
+        this.player.health = Math.min(this.player.maxHealth, this.player.health + 40);
+        break;
+      case 'shield':
+        this.player.maxShield += 25;
+        this.player.shield = Math.min(this.player.maxShield, this.player.shield + 25);
+        break;
+      default:
+        break;
+    }
   }
 
   handleFire() {
@@ -256,29 +460,101 @@ export class Game {
     }
   }
 
+  applyMeleeHits(zombieHits, dragonHits, color = 0xffffff, sizeMult = 1) {
+    for (const hit of zombieHits) {
+      this.effects.slashMark(hit.position, BALANCE.slash.zombieSize * sizeMult, color);
+      if (hit.killed) {
+        this.effects.explosion(hit.position);
+        this.audio.explosion();
+      }
+    }
+    for (const hit of dragonHits) {
+      this.effects.slashMark(hit.position, BALANCE.slash.dragonSize * sizeMult, color);
+      if (hit.killed) {
+        this.effects.explosion(hit.position);
+        this.audio.explosion();
+      }
+    }
+  }
+
   meleeAttack() {
     if (this.meleeCooldown > 0) return;
     this.meleeCooldown = BALANCE.sword.cooldown;
 
     const origin = this.getCameraWorldPosition();
     const direction = this.getLookDirection();
-    const { damage, range, arcCos } = BALANCE.sword;
+    const { range, arcCos } = BALANCE.sword;
+    const damage = this.meleeDamage;
 
-    const hits = [
-      ...this.zombies.hitMelee(origin, direction, range, damage, arcCos),
-      ...this.dragons.hitMelee(origin, direction, range, damage, arcCos),
-    ];
+    const zombieHits = this.zombies.hitMelee(origin, direction, range, damage, arcCos);
+    const dragonHits = this.dragons.hitMelee(origin, direction, range, damage, arcCos);
+    this.applyMeleeHits(zombieHits, dragonHits, 0xffffff, 1);
+  }
 
-    for (const hit of hits) {
-      this.effects.impact(hit.position, 0xffffff);
-      if (hit.killed) {
-        this.effects.explosion(hit.position);
-        this.audio.explosion();
+  releaseSwordAttack(charge) {
+    if (charge >= BALANCE.sword.aoeCharge) {
+      this.circularAoe();
+    } else if (charge >= BALANCE.sword.sweepCharge) {
+      this.giantSweep();
+    } else {
+      this.meleeAttack();
+    }
+  }
+
+  giantSweep() {
+    const origin = this.getCameraWorldPosition();
+    const direction = this.getLookDirection();
+    const { sweepRange, sweepArcCos, sweepDamageMult } = BALANCE.sword;
+    const damage = this.meleeDamage * sweepDamageMult;
+
+    const zombieHits = this.zombies.hitMelee(origin, direction, sweepRange, damage, sweepArcCos);
+    const dragonHits = this.dragons.hitMelee(origin, direction, sweepRange, damage, sweepArcCos);
+    this.applyMeleeHits(zombieHits, dragonHits, 0x4aa0ff, 1.4);
+
+    // Big blue slash in the look direction.
+    const center = this.player.object.position.clone();
+    center.y += this.player.config.height * 0.6;
+    center.addScaledVector(direction, sweepRange * 0.4);
+    this.effects.slashMark(center, sweepRange, 0x4aa0ff);
+    this.audio.explosion();
+  }
+
+  circularAoe() {
+    const origin = this.getCameraWorldPosition();
+    const direction = this.getLookDirection();
+    const { aoeRadius, aoeDamageMult } = BALANCE.sword;
+    const damage = this.meleeDamage * aoeDamageMult;
+
+    // arcCos of -1 makes the hit ignore direction (full 360° circle).
+    const zombieHits = this.zombies.hitMelee(origin, direction, aoeRadius, damage, -1);
+    const dragonHits = this.dragons.hitMelee(origin, direction, aoeRadius, damage, -1);
+    this.applyMeleeHits(zombieHits, dragonHits, 0xffffff, 1.2);
+
+    const center = this.player.object.position.clone();
+    center.y += 0.2;
+    this.effects.shockwave(center, aoeRadius, 0xffffff);
+    this.audio.explosion();
+  }
+
+  updateSwordChargeVisual() {
+    if (!this.viewmodel) return;
+    let emissive = 0x000000;
+    let intensity = 0;
+    if (this.swordCharging) {
+      if (this.swordCharge >= BALANCE.sword.aoeCharge) {
+        emissive = 0xffffff;
+        intensity = 1.6;
+      } else if (this.swordCharge >= BALANCE.sword.sweepCharge) {
+        emissive = 0x2a6bff;
+        intensity = 1.3;
       }
     }
-
-    // White slash arc in front of the player.
-    this.effects.beam(origin, origin.clone().addScaledVector(direction, range), 0xffffff);
+    this.viewmodel.traverse((child) => {
+      if (child.material?.emissive) {
+        child.material.emissive.setHex(emissive);
+        child.material.emissiveIntensity = intensity;
+      }
+    });
   }
 
   activateGuard() {
@@ -300,10 +576,63 @@ export class Game {
     }
   }
 
+  onSelectionChanged() {
+    this.syncSelectedWeapon();
+    this.updateViewmodel();
+  }
+
   syncSelectedWeapon() {
     const slot = this.inventory.selectedSlot;
     if (slot?.kind === 'weapon') {
       this.weapons.switchWeapon(slot.weaponIndex);
+    }
+  }
+
+  updateViewmodel() {
+    if (this.viewmodel) {
+      this.camera.remove(this.viewmodel);
+      disposeViewmodel(this.viewmodel);
+      this.viewmodel = null;
+    }
+
+    const slot = this.inventory.selectedSlot;
+    let kind = null;
+    if (slot?.kind === 'melee') {
+      kind = 'sword';
+    } else if (slot?.kind === 'weapon') {
+      const label = (slot.label ?? '').toLowerCase();
+      if (label.includes('rifle')) kind = 'rifle';
+      else if (label.includes('shotgun')) kind = 'shotgun';
+      else if (label.includes('blaster')) kind = 'blaster';
+      else if (label.includes('daga')) kind = 'dagger';
+    }
+
+    const model = kind ? buildViewmodel(kind) : null;
+    if (model) {
+      this.camera.add(model);
+      this.viewmodel = model;
+    }
+  }
+
+  useSecondaryAction() {
+    switch (this.character.ability) {
+      case 'guard':
+        this.activateGuard();
+        break;
+      case 'dash':
+        this.activateDash();
+        break;
+      default:
+        this.placeSelectedBlock();
+        break;
+    }
+  }
+
+  activateDash() {
+    if (this.dashCooldown > 0) return;
+    if (this.player.startDash(BALANCE.dash.distance, BALANCE.dash.speed)) {
+      this.dashCooldown = BALANCE.dash.cooldown;
+      this.effects.impact(this.player.object.position, 0xbfe0ff);
     }
   }
 
@@ -378,5 +707,22 @@ export class Game {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  dispose() {
+    this.renderer.setAnimationLoop(null);
+    this.input.dispose?.();
+    this.hud.destroy?.();
+    this.shop?.hide?.();
+    this.dragons.dispose?.();
+    this.zombies.dispose?.();
+    this.world.dispose?.();
+    if (this.viewmodel) {
+      this.camera.remove(this.viewmodel);
+      disposeViewmodel(this.viewmodel);
+      this.viewmodel = null;
+    }
+    this.renderer.domElement.remove();
+    this.renderer.dispose?.();
   }
 }

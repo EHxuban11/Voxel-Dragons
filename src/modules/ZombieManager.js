@@ -253,6 +253,13 @@ export class ZombieManager {
     zombie.dead = true;
     zombie.mesh.visible = false;
     this.group.remove(zombie.mesh);
+    this.kills = (this.kills ?? 0) + 1;
+  }
+
+  consumeKills() {
+    const kills = this.kills ?? 0;
+    this.kills = 0;
+    return kills;
   }
 
   clearZombies() {

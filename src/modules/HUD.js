@@ -10,6 +10,9 @@ const DEFAULT_STATE = {
   dragonsTotal: null,
   zombies: 0,
   wave: 1,
+  waveCount: 10,
+  coins: 0,
+  revive: true,
   guard: false,
   ammoText: null,
   inventory: null,
@@ -100,6 +103,90 @@ function injectStyles() {
       border: 1px solid rgba(255, 255, 255, 0.16);
       border-radius: 6px;
       backdrop-filter: blur(4px);
+    }
+
+    .vd-topline {
+      margin-bottom: 5px;
+      font-size: 16px;
+    }
+
+    .vd-heart {
+      font-size: 18px;
+      filter: drop-shadow(0 0 3px rgba(255, 80, 80, 0.65));
+    }
+
+    .vd-heart.is-used {
+      filter: grayscale(1) brightness(0.55);
+    }
+
+    .vd-coins {
+      color: #ffd166;
+      margin-left: 6px;
+    }
+
+    .vd-wavebar {
+      position: absolute;
+      left: 50%;
+      top: 14px;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 4px;
+      padding: 6px 8px;
+      background: rgba(10, 14, 18, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+    }
+
+    .vd-wave-cell {
+      width: 24px;
+      height: 15px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.14);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 800;
+      color: rgba(255, 255, 255, 0.55);
+    }
+
+    .vd-wave-cell.is-done {
+      background: linear-gradient(180deg, #ffd166, #ff8a3c);
+      color: #3a2200;
+    }
+
+    .vd-wave-cell.is-current {
+      background: linear-gradient(180deg, #8be36a, #49a82f);
+      color: #0e2008;
+      box-shadow: 0 0 8px rgba(120, 230, 120, 0.6);
+    }
+
+    .vd-deathscreen {
+      position: absolute;
+      inset: 0;
+      z-index: 40;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 14px;
+      background: rgba(40, 0, 0, 0.8);
+    }
+
+    .vd-deathscreen.is-active { display: flex; }
+
+    .vd-death-text {
+      font-size: clamp(40px, 9vw, 90px);
+      font-weight: 900;
+      color: #ff5252;
+      text-shadow: 0 4px 0 rgba(0, 0, 0, 0.6);
+      letter-spacing: 2px;
+    }
+
+    .vd-death-sub {
+      font-size: 16px;
+      font-weight: 700;
+      color: rgba(255, 230, 230, 0.85);
     }
 
     .vd-help {
@@ -443,14 +530,22 @@ export class HUD {
       <div class="vd-vignette"></div>
       <div class="vd-crosshair"></div>
       <div class="vd-guard" data-hud="guard">🛡️</div>
-      <div class="vd-help">WASD mover | Espacio saltar | 1-8 hotbar | click izq atacar | click der bloque/guardia | E inventario</div>
-      <div class="vd-top-right">Oleada: <span data-hud="wave">1</span><br>Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span></div>
+      <div class="vd-help">WASD mover | Espacio saltar | E o clic izq atacar | F o clic der habilidad | I inventario</div>
+      <div class="vd-wavebar" data-hud="wavebar"></div>
+      <div class="vd-top-right">
+        <div class="vd-topline"><span class="vd-heart" data-hud="heart">❤️</span><span class="vd-coins">🪙 <span data-hud="coins">0</span></span></div>
+        Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span>
+      </div>
       <div class="vd-message" data-hud="message"></div>
+      <div class="vd-deathscreen" data-hud="deathscreen">
+        <div class="vd-death-text">Has muerto</div>
+        <div class="vd-death-sub">Volviendo a la selección de personaje...</div>
+      </div>
       <div class="vd-inventory" data-hud="inventoryPanel"></div>
       <div class="vd-bottom-left">
-        <div class="vd-shield-label">Escudo <span data-hud="shield">100</span>%</div>
+        <div class="vd-shield-label">Escudo <span data-hud="shield">100 / 100</span></div>
         <div class="vd-shield-shell"><div class="vd-shield-fill" data-hud="shieldFill"></div></div>
-        <div class="vd-health-label">Vida <span data-hud="health">100</span>%</div>
+        <div class="vd-health-label">Vida <span data-hud="health">100 / 100</span></div>
         <div class="vd-health-shell"><div class="vd-health-fill" data-hud="healthFill"></div></div>
       </div>
       <div class="vd-bottom-right">
@@ -471,14 +566,30 @@ export class HUD {
       weapon: this.root.querySelector('[data-hud="weapon"]'),
       dragons: this.root.querySelector('[data-hud="dragons"]'),
       zombies: this.root.querySelector('[data-hud="zombies"]'),
-      wave: this.root.querySelector('[data-hud="wave"]'),
+      coins: this.root.querySelector('[data-hud="coins"]'),
+      heart: this.root.querySelector('[data-hud="heart"]'),
+      wavebar: this.root.querySelector('[data-hud="wavebar"]'),
+      deathscreen: this.root.querySelector('[data-hud="deathscreen"]'),
       message: this.root.querySelector('[data-hud="message"]'),
       hotbar: this.root.querySelector('[data-hud="hotbar"]'),
       inventoryPanel: this.root.querySelector('[data-hud="inventoryPanel"]'),
     };
 
+    this.waveCells = [];
+    for (let i = 1; i <= DEFAULT_STATE.waveCount; i += 1) {
+      const cell = document.createElement('div');
+      cell.className = 'vd-wave-cell';
+      cell.textContent = String(i);
+      this.nodes.wavebar.appendChild(cell);
+      this.waveCells.push(cell);
+    }
+
     this.container.appendChild(this.root);
     this.update(DEFAULT_STATE);
+  }
+
+  showDeathScreen() {
+    this.nodes.deathscreen.classList.add('is-active');
   }
 
   update(state = {}) {
@@ -488,24 +599,32 @@ export class HUD {
     const healthPercent = Math.round((health / maxHealth) * 100);
     const maxShield = Math.max(0, firstNumber(nextState, ['maxShield', 'shieldMax'], DEFAULT_STATE.maxShield));
     const shield = Math.max(0, Math.min(maxShield, firstNumber(nextState, ['shield'], DEFAULT_STATE.shield)));
-    const shieldPercent = maxShield > 0 ? Math.round((shield / maxShield) * 100) : 0;
     const { ammo, maxAmmo } = getAmmo(nextState);
     const weapon = getWeaponName(nextState);
     const dragons = getDragonCount(nextState);
 
-    this.nodes.shield.textContent = String(shieldPercent);
+    this.nodes.shield.textContent = `${Math.round(shield)} / ${Math.round(maxShield)}`;
     this.nodes.shieldFill.style.transform = `scaleX(${maxShield > 0 ? shield / maxShield : 0})`;
-    this.nodes.health.textContent = String(healthPercent);
+    this.nodes.health.textContent = `${Math.round(health)} / ${Math.round(maxHealth)}`;
     this.nodes.healthFill.style.transform = `scaleX(${health / maxHealth})`;
     this.nodes.healthFill.style.filter = healthPercent <= 25 ? 'saturate(1.35) brightness(1.15)' : '';
     this.nodes.weapon.textContent = weapon;
-    this.nodes.ammo.textContent = typeof nextState.ammoText === 'string' && nextState.ammoText
+    this.nodes.ammo.textContent = nextState.ammoText != null
       ? nextState.ammoText
       : (maxAmmo > 0 ? `${ammo} / ${maxAmmo}` : String(ammo));
     this.nodes.dragons.textContent = dragons.total === null ? String(dragons.value) : `${dragons.value} / ${dragons.total}`;
     this.nodes.zombies.textContent = String(firstNumber(nextState, ['zombies'], DEFAULT_STATE.zombies));
-    this.nodes.wave.textContent = String(firstNumber(nextState, ['wave'], DEFAULT_STATE.wave));
+    this.nodes.coins.textContent = String(firstNumber(nextState, ['coins'], DEFAULT_STATE.coins));
+    this.nodes.heart.classList.toggle('is-used', !nextState.revive);
     this.nodes.guard.classList.toggle('is-active', Boolean(nextState.guard));
+
+    const wave = firstNumber(nextState, ['wave'], DEFAULT_STATE.wave);
+    for (let i = 0; i < this.waveCells.length; i += 1) {
+      const cell = this.waveCells[i];
+      const cellWave = i + 1;
+      cell.classList.toggle('is-current', cellWave === wave);
+      cell.classList.toggle('is-done', cellWave < wave);
+    }
     this.renderInventory(nextState.inventory);
   }
 

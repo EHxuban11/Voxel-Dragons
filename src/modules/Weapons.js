@@ -262,6 +262,12 @@ export class Weapons {
     this.targets = targets ?? [];
   }
 
+  scaleDamage(factor) {
+    for (const weapon of this.inventory) {
+      weapon.damage *= factor;
+    }
+  }
+
   addAmmo(weaponName, amount) {
     const weapon = this.inventory.find((entry) => entry.name === weaponName);
     if (!weapon) return false;

@@ -53,9 +53,9 @@ export const BALANCE = deepFreeze({
 
   world: {
     blockSize: 1,
-    width: 48,
-    depth: 48,
-    maxHeight: 20,
+    width: 80,
+    depth: 80,
+    maxHeight: 22,
     waterLevel: 6,
     seed: 1337,
     terrain: {
@@ -95,7 +95,7 @@ export const BALANCE = deepFreeze({
       range: 90,
       fireRate: 8,
       clipSize: 30,
-      reserveAmmo: 120,
+      reserveAmmo: 0,
       reloadTime: 1.4,
       pellets: 1,
       spread: 0.008,
@@ -110,7 +110,7 @@ export const BALANCE = deepFreeze({
       range: 22,
       fireRate: 1.2,
       clipSize: 8,
-      reserveAmmo: 40,
+      reserveAmmo: 8,
       reloadTime: 1.85,
       pellets: 8,
       spread: 0.09,
@@ -126,8 +126,8 @@ export const BALANCE = deepFreeze({
       damage: 150,
       range: 140,
       fireRate: 0.2,
-      clipSize: 20,
-      reserveAmmo: 60,
+      clipSize: 1,
+      reserveAmmo: 2,
       reloadTime: 2.2,
       pellets: 1,
       spread: 0,
@@ -171,6 +171,14 @@ export const BALANCE = deepFreeze({
     range: 4.2,
     cooldown: 1.0, // seconds between slashes
     arcCos: 0.3, // frontal cone (~72 degrees half-angle)
+    // Charged attacks (hold left click as the knight).
+    sweepCharge: 1.5, // seconds to charge the blue giant sweep
+    aoeCharge: 4.0, // seconds to charge the white-aura circular AoE
+    sweepRange: 9, // reach of the giant sweep
+    sweepArcCos: -0.25, // very wide frontal arc
+    sweepDamageMult: 2, // double a normal slash
+    aoeRadius: 9, // radius of the circular area attack
+    aoeDamageMult: 4, // big damage
   },
 
   guard: {
@@ -180,9 +188,35 @@ export const BALANCE = deepFreeze({
   },
 
   dash: {
-    distance: 5, // blocks travelled
-    speed: 30, // blocks per second (≈0.17s dash)
+    distance: 8, // blocks travelled
+    speed: 38, // blocks per second
     cooldown: 5, // seconds between dashes
+  },
+
+  progression: {
+    waveCount: 10, // total waves in a run
+    shopWave: 5, // the shop opens before this wave
+    // Reserve ammo granted when reaching the shop wave (only useful to the duck).
+    waveAmmo: { Rifle: 60, Shotgun: 16, Blaster: 3 },
+  },
+
+  slash: {
+    zombieSize: 1.6,
+    dragonSize: 3.4,
+  },
+
+  coins: {
+    zombie: 2,
+    dragon: 5,
+  },
+
+  shop: {
+    items: [
+      { id: 'damage', name: '+25% Daño', emoji: '⚔️', cost: 18 },
+      { id: 'speed', name: '+15% Velocidad', emoji: '👟', cost: 14 },
+      { id: 'health', name: '+40 Vida máx', emoji: '❤️', cost: 14 },
+      { id: 'shield', name: '+25 Escudo máx', emoji: '🛡️', cost: 12 },
+    ],
   },
 
   dragons: {

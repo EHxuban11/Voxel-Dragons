@@ -148,6 +148,121 @@ export class Effects {
     this.effects.push(effect);
   }
 
+  // A white slash mark that pops over a struck enemy, facing the camera and
+  // rotated at a random angle. Used by the sword and the hunter's daggers.
+  slashMark(position, size = 1.6, color = 0xffffff) {
+    if (!this.scene) return;
+
+    const pos = resolvePosition(position);
+    const material = new THREE.MeshBasicMaterial({
+      map: this._getSlashTexture(),
+      color,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), material);
+    mesh.position.copy(pos);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 1000;
+    this.scene.add(mesh);
+
+    const camera = this.camera;
+    const roll = Math.random() * Math.PI * 2;
+    const rollQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), roll);
+    const camQuat = new THREE.Quaternion();
+    const ttl = 0.4;
+    const effect = {
+      object: mesh,
+      age: 0,
+      ttl,
+      update: (delta) => {
+        effect.age += delta;
+        const progress = THREE.MathUtils.clamp(effect.age / ttl, 0, 1);
+        if (camera) {
+          camera.getWorldQuaternion(camQuat);
+          mesh.quaternion.copy(camQuat).multiply(rollQuat);
+        }
+        mesh.scale.setScalar(1 + progress * 0.35);
+        material.opacity = 1 - progress * progress;
+        return progress < 1;
+      },
+    };
+
+    this.effects.push(effect);
+  }
+
+  shockwave(center, radius = 9, color = 0xffffff) {
+    if (!this.scene) return;
+
+    const pos = resolvePosition(center);
+    const geometry = new THREE.RingGeometry(0.6, 1, 44);
+    geometry.rotateX(-Math.PI / 2); // lay flat on the ground
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.75,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(pos);
+    mesh.frustumCulled = false;
+    this.scene.add(mesh);
+
+    const ttl = 0.5;
+    const effect = {
+      object: mesh,
+      age: 0,
+      ttl,
+      update: (delta) => {
+        effect.age += delta;
+        const progress = THREE.MathUtils.clamp(effect.age / ttl, 0, 1);
+        mesh.scale.setScalar(0.6 + progress * radius * 1.2);
+        material.opacity = 0.75 * (1 - progress);
+        return progress < 1;
+      },
+    };
+
+    this.effects.push(effect);
+    this._addLight(pos, color, 4, radius * 1.4, ttl);
+  }
+
+  _getSlashTexture() {
+    if (this._slashTexture) return this._slashTexture;
+
+    const dim = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = dim;
+    canvas.height = dim;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, dim, dim);
+    ctx.lineCap = 'round';
+
+    // A tapered, slightly curved white slash stroke.
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.lineWidth = 16;
+    ctx.beginPath();
+    ctx.moveTo(22, 100);
+    ctx.quadraticCurveTo(70, 26, 108, 44);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 1)';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(26, 96);
+    ctx.quadraticCurveTo(70, 32, 104, 46);
+    ctx.stroke();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    this._slashTexture = texture;
+    return texture;
+  }
+
   beam(start, end, color = 0x54d2ff) {
     if (!this.scene) return;
 

@@ -1,9 +1,11 @@
 const DEFAULT_BINDINGS = {
   Space: 'jump',
-  KeyE: 'interact',
+  KeyE: 'attack',
+  KeyI: 'interact',
   KeyF: 'alternate',
   KeyQ: 'drop',
   KeyR: 'reload',
+  KeyP: 'debugSkipWave',
   ShiftLeft: 'sprint',
   ShiftRight: 'sprint',
   ControlLeft: 'crouch',
