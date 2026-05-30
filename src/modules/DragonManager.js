@@ -64,37 +64,28 @@ export class DragonManager {
   }
 
   createSharedAssets() {
+    // A single unit cube is reused and scaled per part for a blocky,
+    // Minecraft Ender-Dragon look.
     this.geometry = {
-      body: new THREE.BoxGeometry(3.4, 1.25, 1.45),
-      belly: new THREE.BoxGeometry(2.2, 0.35, 0.95),
-      head: new THREE.BoxGeometry(1.25, 0.9, 0.9),
-      neck: new THREE.BoxGeometry(1.1, 0.65, 0.75),
-      tail: new THREE.ConeGeometry(0.5, 2.8, 4),
-      wing: new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(-4.2, 0.18, -0.35),
-        new THREE.Vector3(-1.15, 0.05, -2.75),
-      ]),
-      horn: new THREE.ConeGeometry(0.14, 0.55, 4),
+      box: new THREE.BoxGeometry(1, 1, 1),
       fireball: new THREE.SphereGeometry(0.42, 8, 6),
     };
-    this.geometry.wing.setIndex([0, 1, 2]);
-    this.geometry.wing.computeVertexNormals();
 
     this.material = {
-      body: new THREE.MeshStandardMaterial({ color: 0x3e6f45, roughness: 0.85, flatShading: true }),
-      belly: new THREE.MeshStandardMaterial({ color: 0x8aa36a, roughness: 0.9, flatShading: true }),
+      body: new THREE.MeshStandardMaterial({ color: 0x23232e, roughness: 0.9, flatShading: true }),
+      belly: new THREE.MeshStandardMaterial({ color: 0x33333f, roughness: 0.95, flatShading: true }),
       wing: new THREE.MeshStandardMaterial({
-        color: 0x2d5538,
-        roughness: 0.9,
+        color: 0x17171f,
+        roughness: 0.95,
         flatShading: true,
         side: THREE.DoubleSide,
       }),
-      horn: new THREE.MeshStandardMaterial({ color: 0xd8d0a8, roughness: 0.7, flatShading: true }),
+      spike: new THREE.MeshStandardMaterial({ color: 0x4a3a6a, roughness: 0.85, flatShading: true }),
+      eye: new THREE.MeshStandardMaterial({ color: 0xcf7bff, emissive: 0x7a2fff, emissiveIntensity: 1.5, roughness: 0.4, flatShading: true }),
       fireball: new THREE.MeshStandardMaterial({
-        color: 0xff6b1a,
-        emissive: 0xff3400,
-        emissiveIntensity: 1.35,
+        color: 0xb44bff,
+        emissive: 0x7a1fff,
+        emissiveIntensity: 1.5,
         roughness: 0.55,
         flatShading: true,
       }),
@@ -199,56 +190,119 @@ export class DragonManager {
     this.spawnDragons(Math.max(0, Math.floor(count)));
   }
 
+  _box(w, h, d, material = this.material.body, cast = true) {
+    const mesh = new THREE.Mesh(this.geometry.box, material);
+    mesh.scale.set(w, h, d);
+    mesh.castShadow = cast;
+    return mesh;
+  }
+
+  makeWing(side) {
+    const wing = new THREE.Group();
+    wing.name = side > 0 ? 'leftWing' : 'rightWing';
+    wing.position.set(0.3, 0.95, side * 0.85);
+
+    // Leading bone slanting back and out.
+    const bone = this._box(0.35, 0.35, 3.2, this.material.body);
+    bone.position.set(-0.4, 0.1, 1.6);
+    wing.add(bone);
+
+    // Big flat membrane panel.
+    const membrane = this._box(2.6, 0.12, 3.0, this.material.wing, false);
+    membrane.position.set(-1.4, 0, 1.5);
+    wing.add(membrane);
+
+    // Outer finger spikes.
+    for (let i = 0; i < 3; i += 1) {
+      const finger = this._box(0.16, 0.16, 1.0, this.material.wing, false);
+      finger.position.set(-2.6, 0, 0.7 + i * 0.85);
+      wing.add(finger);
+    }
+
+    if (side < 0) wing.scale.z = -1; // mirror the right wing
+    return wing;
+  }
+
   createDragonMesh(index) {
     const dragon = new THREE.Group();
-    dragon.name = `LowPolyDragon_${index}`;
+    dragon.name = `EnderDragon_${index}`;
 
-    const body = new THREE.Mesh(this.geometry.body, this.material.body);
-    body.castShadow = true;
-    body.receiveShadow = true;
-    dragon.add(body);
-
-    const belly = new THREE.Mesh(this.geometry.belly, this.material.belly);
-    belly.position.set(0.15, -0.55, 0);
+    // Torso + chest + belly.
+    const torso = this._box(2.8, 1.5, 1.9);
+    torso.position.set(-0.3, 0, 0);
+    torso.receiveShadow = true;
+    dragon.add(torso);
+    const chest = this._box(1.7, 1.7, 2.0);
+    chest.position.set(1.2, 0.15, 0);
+    dragon.add(chest);
+    const belly = this._box(2.6, 0.4, 1.5, this.material.belly, false);
+    belly.position.set(0.2, -0.85, 0);
     dragon.add(belly);
 
-    const neck = new THREE.Mesh(this.geometry.neck, this.material.body);
-    neck.position.set(2, 0.35, 0);
-    neck.rotation.z = -0.25;
-    dragon.add(neck);
+    // Neck.
+    const neck1 = this._box(1.1, 1.0, 1.0);
+    neck1.position.set(2.2, 0.65, 0);
+    dragon.add(neck1);
+    const neck2 = this._box(0.95, 0.9, 0.85);
+    neck2.position.set(3.0, 1.15, 0);
+    dragon.add(neck2);
 
-    const head = new THREE.Mesh(this.geometry.head, this.material.body);
-    head.position.set(2.9, 0.55, 0);
-    head.castShadow = true;
+    // Head with jaw, snout and glowing purple eyes.
+    const head = this._box(1.5, 1.2, 1.25);
+    head.position.set(4.0, 1.55, 0);
     dragon.add(head);
-
-    const tail = new THREE.Mesh(this.geometry.tail, this.material.body);
-    tail.position.set(-2.45, 0.15, 0);
-    tail.rotation.z = Math.PI / 2;
-    dragon.add(tail);
-
-    const leftWing = new THREE.Mesh(this.geometry.wing, this.material.wing);
-    leftWing.name = 'leftWing';
-    leftWing.position.set(0.15, 0.35, 0.75);
-    dragon.add(leftWing);
-
-    const rightWing = new THREE.Mesh(this.geometry.wing, this.material.wing);
-    rightWing.name = 'rightWing';
-    rightWing.position.set(0.15, 0.35, -0.75);
-    rightWing.scale.z = -1;
-    dragon.add(rightWing);
-
-    for (const z of [-0.28, 0.28]) {
-      const horn = new THREE.Mesh(this.geometry.horn, this.material.horn);
-      horn.position.set(3.35, 1.05, z);
-      horn.rotation.z = -Math.PI / 2.8;
+    const snout = this._box(1.1, 0.5, 1.0);
+    snout.position.set(4.95, 1.65, 0);
+    dragon.add(snout);
+    const jaw = this._box(1.15, 0.38, 1.0);
+    jaw.position.set(4.9, 1.12, 0);
+    dragon.add(jaw);
+    for (const z of [0.55, -0.55]) {
+      const eye = this._box(0.42, 0.4, 0.28, this.material.eye, false);
+      eye.position.set(4.3, 1.95, z);
+      dragon.add(eye);
+      const horn = this._box(0.28, 0.5, 0.28, this.material.spike, false);
+      horn.position.set(3.75, 2.2, z * 0.8);
+      horn.rotation.z = 0.3;
       dragon.add(horn);
     }
 
+    // Spine spikes from neck to tail.
+    for (const [sx, sh] of [[2.0, 0.55], [1.0, 0.55], [0.0, 0.5], [-1.0, 0.45]]) {
+      const spike = this._box(0.3, sh, 0.3, this.material.spike, false);
+      spike.position.set(sx, 1.05, 0);
+      dragon.add(spike);
+    }
+
+    // Tapering, drooping tail with fins.
+    const segs = [[1.0, 0.9, 0.9], [0.8, 0.75, 0.75], [0.6, 0.6, 0.6], [0.45, 0.45, 0.45], [0.32, 0.36, 0.36]];
+    let tx = -1.7;
+    let ty = -0.05;
+    for (let i = 0; i < segs.length; i += 1) {
+      const [w, h, d] = segs[i];
+      const seg = this._box(w, h, d);
+      seg.position.set(tx, ty, 0);
+      dragon.add(seg);
+      const fin = this._box(0.16, 0.4, 0.16, this.material.spike, false);
+      fin.position.set(tx, ty + h * 0.5 + 0.18, 0);
+      dragon.add(fin);
+      tx -= (w * 0.5 + (segs[i + 1]?.[0] ?? 0.3) * 0.5) + 0.05;
+      ty -= 0.13;
+    }
+
+    // Four stubby legs.
+    for (const [lx, lz] of [[1.1, 0.85], [1.1, -0.85], [-0.8, 0.85], [-0.8, -0.85]]) {
+      const leg = this._box(0.5, 0.95, 0.5);
+      leg.position.set(lx, -0.95, lz);
+      dragon.add(leg);
+    }
+
+    // Wings.
+    dragon.add(this.makeWing(1));
+    dragon.add(this.makeWing(-1));
+
     dragon.traverse((child) => {
-      if (child.isMesh) {
-        child.userData.dragonRoot = dragon;
-      }
+      if (child.isMesh) child.userData.dragonRoot = dragon;
     });
 
     return dragon;
