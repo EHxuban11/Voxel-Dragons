@@ -35,6 +35,8 @@ export class SkeletonManager {
     this.health = options.health ?? 22;
     this.speed = options.speed ?? 3.0;
     this.shootRange = options.shootRange ?? 18;
+    this.keepMin = options.keepMin ?? 9; // retreat if the player is closer than this
+    this.keepMax = options.keepMax ?? 15; // follow if the player is farther than this
     this.shootCooldown = options.shootCooldown ?? 2.0;
     this.arrowSpeed = options.arrowSpeed ?? 24;
     this.arrowDamage = options.arrowDamage ?? 6;
@@ -148,10 +150,16 @@ export class SkeletonManager {
         skeleton.mesh.rotation.y = Math.atan2(this.tmpDir.x, this.tmpDir.z);
       }
 
-      // Approach until within shooting range, then hold position and fire.
-      if (distance > this.shootRange) {
-        const nextX = THREE.MathUtils.clamp(skeleton.mesh.position.x + this.tmpDir.x * skeleton.speed * speedFactor * dt, this.bounds.minX, this.bounds.maxX);
-        const nextZ = THREE.MathUtils.clamp(skeleton.mesh.position.z + this.tmpDir.z * skeleton.speed * speedFactor * dt, this.bounds.minZ, this.bounds.maxZ);
+      // Kiting: keep a comfortable distance. Back off if the player gets close,
+      // hold and fire at mid range, follow if the player runs away.
+      let move = 0;
+      if (distance > this.keepMax) move = 1; // follow
+      else if (distance < this.keepMin) move = -1; // retreat
+      if (move !== 0) {
+        const stepX = this.tmpDir.x * skeleton.speed * speedFactor * dt * move;
+        const stepZ = this.tmpDir.z * skeleton.speed * speedFactor * dt * move;
+        const nextX = THREE.MathUtils.clamp(skeleton.mesh.position.x + stepX, this.bounds.minX, this.bounds.maxX);
+        const nextZ = THREE.MathUtils.clamp(skeleton.mesh.position.z + stepZ, this.bounds.minZ, this.bounds.maxZ);
         if (groundHeight(world, nextX, nextZ) - skeleton.mesh.position.y <= 1.1) {
           skeleton.mesh.position.x = nextX;
           skeleton.mesh.position.z = nextZ;

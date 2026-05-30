@@ -110,6 +110,7 @@ export class Player {
 
     this.isGrounded = false;
     this.isAlive = true;
+    this.wallJumpCooldown = 0;
 
     // Knight/Hunter parry guard (right click). While active, melee attackers
     // die and dragon fireballs are reflected back.
@@ -170,6 +171,30 @@ export class Player {
     const feet = Math.floor(this.cameraHolder.position.y + 0.1);
     const head = Math.floor(this.cameraHolder.position.y + this.config.height - 0.1);
     for (let y = feet; y <= head; y += 1) {
+      if (isSolidBlock(world, cx, y, cz)) return true;
+    }
+    return false;
+  }
+
+  isTouchingWall(world) {
+    if (typeof world?.getBlock !== 'function') return false;
+    const pos = this.cameraHolder.position;
+    return this.isBlockedAt(world, pos.x + 0.5, pos.z)
+      || this.isBlockedAt(world, pos.x - 0.5, pos.z)
+      || this.isBlockedAt(world, pos.x, pos.z + 0.5)
+      || this.isBlockedAt(world, pos.x, pos.z - 0.5);
+  }
+
+  // Blocked only if a wall rises more than one block above the feet (a single
+  // block is a climbable step).
+  isClimbBlocked(world, x, z) {
+    if (typeof world?.getBlock !== 'function') return false;
+    const cx = Math.floor(x);
+    const cz = Math.floor(z);
+    const feetY = this.cameraHolder.position.y;
+    const lowCell = Math.floor(feetY + 1.05); // first cell above the one-block step
+    const highCell = Math.floor(feetY + this.config.height - 0.05);
+    for (let y = lowCell; y <= highCell; y += 1) {
       if (isSolidBlock(world, cx, y, cz)) return true;
     }
     return false;
@@ -249,13 +274,34 @@ export class Player {
     this.velocity.x = MOVE.x * speed;
     this.velocity.z = MOVE.z * speed;
 
-    if (this.isGrounded && hasInput(input, ['Space', ' ', 'space', 'jump'])) {
-      this.velocity.y = this.config.jumpSpeed;
-      this.isGrounded = false;
+    if (this.wallJumpCooldown > 0) this.wallJumpCooldown -= delta;
+    const jumpHeld = hasInput(input, ['Space', ' ', 'space', 'jump']);
+    if (jumpHeld) {
+      if (this.isGrounded) {
+        this.velocity.y = this.config.jumpSpeed;
+        this.isGrounded = false;
+        this.wallJumpCooldown = 0.35;
+      } else if (this.wallJumpCooldown <= 0 && this.isTouchingWall(world)) {
+        // Wall jump: kick off a wall to climb out of pits/lakes.
+        this.velocity.y = this.config.jumpSpeed;
+        this.wallJumpCooldown = 0.35;
+      }
     }
 
     this.velocity.y -= this.config.gravity * delta;
-    this.cameraHolder.position.addScaledVector(this.velocity, delta);
+
+    // Walls taller than one block stop horizontal movement (a single-block
+    // step is allowed and is climbed by the vertical resolve). Per-axis so you
+    // can still slide along a wall.
+    const pos = this.cameraHolder.position;
+    if (this.velocity.x !== 0 && this.isClimbBlocked(world, pos.x + this.velocity.x * delta, pos.z)) {
+      this.velocity.x = 0;
+    }
+    if (this.velocity.z !== 0 && this.isClimbBlocked(world, pos.x, pos.z + this.velocity.z * delta)) {
+      this.velocity.z = 0;
+    }
+
+    pos.addScaledVector(this.velocity, delta);
 
     this.resolveVerticalCollision(world);
 

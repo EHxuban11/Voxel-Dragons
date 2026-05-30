@@ -38,6 +38,14 @@ export class DragonManager {
     this.tmpPreviousPosition = new THREE.Vector3();
     this.tmpRaycaster = new THREE.Raycaster();
     this.tmpQuaternion = new THREE.Quaternion();
+    // Head-tracking scratch objects.
+    this._headPos = new THREE.Vector3();
+    this._headMatrix = new THREE.Matrix4();
+    this._headWorldQuat = new THREE.Quaternion();
+    this._headParentQuat = new THREE.Quaternion();
+    // Rotates +X (head forward) onto -Z (lookAt forward).
+    this._headForwardOffset = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+    this._worldUp = new THREE.Vector3(0, 1, 0);
     this.elapsed = 0;
 
     this.count = options.count ?? DEFAULT_DRAGON_COUNT;
@@ -247,25 +255,30 @@ export class DragonManager {
     neck2.position.set(3.0, 1.15, 0);
     dragon.add(neck2);
 
-    // Head with jaw, snout and glowing purple eyes.
-    const head = this._box(1.5, 1.2, 1.25);
-    head.position.set(4.0, 1.55, 0);
-    dragon.add(head);
+    // Head group (pivots at the neck so it can track the player). Its parts
+    // extend along +X (the dragon's forward axis).
+    const head = new THREE.Group();
+    head.name = 'head';
+    head.position.set(3.5, 1.45, 0);
+    const skull = this._box(1.5, 1.2, 1.25);
+    skull.position.set(0.6, 0.1, 0);
+    head.add(skull);
     const snout = this._box(1.1, 0.5, 1.0);
-    snout.position.set(4.95, 1.65, 0);
-    dragon.add(snout);
+    snout.position.set(1.55, 0.2, 0);
+    head.add(snout);
     const jaw = this._box(1.15, 0.38, 1.0);
-    jaw.position.set(4.9, 1.12, 0);
-    dragon.add(jaw);
+    jaw.position.set(1.5, -0.33, 0);
+    head.add(jaw);
     for (const z of [0.55, -0.55]) {
       const eye = this._box(0.42, 0.4, 0.28, this.material.eye, false);
-      eye.position.set(4.3, 1.95, z);
-      dragon.add(eye);
+      eye.position.set(0.9, 0.5, z);
+      head.add(eye);
       const horn = this._box(0.28, 0.5, 0.28, this.material.spike, false);
-      horn.position.set(3.75, 2.2, z * 0.8);
+      horn.position.set(0.35, 0.85, z * 0.8);
       horn.rotation.z = 0.3;
-      dragon.add(horn);
+      head.add(horn);
     }
+    dragon.add(head);
 
     // Spine spikes from neck to tail.
     for (const [sx, sh] of [[2.0, 0.55], [1.0, 0.55], [0.0, 0.5], [-1.0, 0.45]]) {
@@ -357,11 +370,14 @@ export class DragonManager {
     dragon.mesh.position.lerp(this.tmpTarget, Math.min(1, delta * (0.75 + dragon.aggression)));
     dragon.velocity.subVectors(dragon.mesh.position, this.tmpPreviousPosition);
 
-    if (dragon.velocity.lengthSq() > 0.0001) {
-      const heading = Math.atan2(dragon.velocity.x, dragon.velocity.z);
-      dragon.mesh.rotation.y = lerpAngle(dragon.mesh.rotation.y, heading, delta * 4);
-      dragon.mesh.rotation.z = THREE.MathUtils.clamp(-dragon.velocity.y * 0.18, -0.35, 0.35);
+    // The body mostly faces the player so it never turns far away from them.
+    const dxp = playerPosition.x - dragon.mesh.position.x;
+    const dzp = playerPosition.z - dragon.mesh.position.z;
+    if (dxp * dxp + dzp * dzp > 0.0001) {
+      const faceYaw = Math.atan2(-dzp, dxp);
+      dragon.mesh.rotation.y = lerpAngle(dragon.mesh.rotation.y, faceYaw, delta * 3);
     }
+    dragon.mesh.rotation.z = THREE.MathUtils.clamp(-dragon.velocity.y * 0.18, -0.35, 0.35);
 
     const flap = Math.sin(this.elapsed * 12 + dragon.id) * 0.55;
     const leftWing = dragon.mesh.getObjectByName('leftWing');
@@ -369,6 +385,28 @@ export class DragonManager {
     if (leftWing && rightWing) {
       leftWing.rotation.x = flap;
       rightWing.rotation.x = -flap;
+    }
+
+    // The head tracks the player, but only within 30 degrees of the body so it
+    // looks natural.
+    dragon.mesh.updateMatrixWorld();
+    const head = dragon.mesh.getObjectByName('head');
+    if (head) {
+      head.getWorldPosition(this._headPos);
+      this.tmpDirection.subVectors(playerPosition, this._headPos);
+      if (this.tmpDirection.lengthSq() > 0.0001) {
+        this.tmpDirection.normalize();
+        dragon.mesh.getWorldQuaternion(this._headParentQuat);
+        this.tmpDirection.applyQuaternion(this._headParentQuat.invert()); // to dragon-local space
+        const limit = Math.PI / 6; // 30 degrees
+        const localYaw = Math.atan2(-this.tmpDirection.z, this.tmpDirection.x);
+        const localPitch = Math.asin(THREE.MathUtils.clamp(this.tmpDirection.y, -1, 1));
+        head.rotation.set(
+          0,
+          THREE.MathUtils.clamp(localYaw, -limit, limit),
+          THREE.MathUtils.clamp(localPitch, -limit, limit),
+        );
+      }
     }
   }
 

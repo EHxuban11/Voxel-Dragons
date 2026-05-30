@@ -108,6 +108,10 @@ export class World extends THREE.Group {
     this.time = 0;
 
     this.geometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+    // Flat quad used for the water surface so adjacent water tiles merge into a
+    // single seamless sheet instead of showing per-cube edges.
+    this.waterGeometry = new THREE.PlaneGeometry(BLOCK_SIZE, BLOCK_SIZE);
+    this.waterGeometry.rotateX(-Math.PI / 2);
     this.materials = new Map(
       Object.entries(BLOCK_TYPES).map(([type, config]) => [
         type,
@@ -118,6 +122,7 @@ export class World extends THREE.Group {
           transparent: Boolean(config.transparent),
           opacity: config.opacity ?? 1,
           depthWrite: !config.transparent,
+          side: config.transparent ? THREE.DoubleSide : THREE.FrontSide,
         }),
       ]),
     );
@@ -137,9 +142,10 @@ export class World extends THREE.Group {
       for (let z = -halfDepth; z < depth - halfDepth; z += 1) {
         const broad = valueNoise2D(x, z, seed, 18);
         const detail = valueNoise2D(x + 91, z - 47, seed + 19, 7);
+        // Rolling hills kept above the water line, so there is no ocean.
         const height = Math.max(
-          1,
-          Math.min(maxHeight - 2, Math.floor(waterLevel + (broad - 0.45) * 10 + (detail - 0.5) * 4)),
+          waterLevel + 1,
+          Math.min(maxHeight - 2, Math.floor(waterLevel + 2 + (broad - 0.5) * 6 + (detail - 0.5) * 3)),
         );
 
         for (let y = 0; y <= height; y += 1) {
@@ -230,32 +236,35 @@ export class World extends THREE.Group {
   buildLandmarks() {
     const { waterLevel } = this.options;
     const plateauTop = waterLevel + 2;
-    const plateauRadius = 13;
-    const moatOuter = 17;
+    const plateauRadius = 15;
     const castleHalf = 8;
+    const lake = { x: 12, z: 12, radius: 4 };
 
-    for (let x = -moatOuter - 1; x <= moatOuter + 1; x += 1) {
-      for (let z = -moatOuter - 1; z <= moatOuter + 1; z += 1) {
-        const distance = Math.hypot(x, z);
-        if (distance <= plateauRadius) {
-          // Flat grass plateau for the castle to sit on.
-          this.clearColumn(x, z);
-          for (let y = 0; y <= plateauTop; y += 1) {
-            let type = 'stone';
-            if (y === plateauTop) type = 'grass';
-            else if (y >= plateauTop - 2) type = 'dirt';
-            this.setBlock(x, y, z, type, false);
-          }
-        } else if (distance <= moatOuter) {
-          // Water moat / small lake ringing the castle.
-          this.clearColumn(x, z);
-          const bed = waterLevel - 3;
-          for (let y = 0; y <= bed; y += 1) {
-            this.setBlock(x, y, z, y >= bed - 1 ? 'sand' : 'stone', false);
-          }
-          for (let y = bed + 1; y <= waterLevel; y += 1) {
-            this.setBlock(x, y, z, 'water', false);
-          }
+    // Flat grass plateau for the castle (no moat).
+    for (let x = -plateauRadius - 1; x <= plateauRadius + 1; x += 1) {
+      for (let z = -plateauRadius - 1; z <= plateauRadius + 1; z += 1) {
+        if (Math.hypot(x, z) > plateauRadius) continue;
+        this.clearColumn(x, z);
+        for (let y = 0; y <= plateauTop; y += 1) {
+          let type = 'stone';
+          if (y === plateauTop) type = 'grass';
+          else if (y >= plateauTop - 2) type = 'dirt';
+          this.setBlock(x, y, z, type, false);
+        }
+      }
+    }
+
+    // A single small lake tucked into a corner beside the castle.
+    const bed = waterLevel - 2;
+    for (let x = lake.x - lake.radius - 1; x <= lake.x + lake.radius + 1; x += 1) {
+      for (let z = lake.z - lake.radius - 1; z <= lake.z + lake.radius + 1; z += 1) {
+        if (Math.hypot(x - lake.x, z - lake.z) > lake.radius) continue;
+        this.clearColumn(x, z);
+        for (let y = 0; y <= bed; y += 1) {
+          this.setBlock(x, y, z, y >= bed - 1 ? 'sand' : 'stone', false);
+        }
+        for (let y = bed + 1; y <= waterLevel; y += 1) {
+          this.setBlock(x, y, z, 'water', false);
         }
       }
     }
@@ -411,12 +420,18 @@ export class World extends THREE.Group {
   addBlock(hit, type = 'dirt') {
     if (!hit?.position || !VALID_TYPES.has(type)) return false;
 
+    // Aiming directly at water fills that cell (you can build in water).
+    if (hit.type === 'water') {
+      return this.setBlock(hit.position.x, hit.position.y, hit.position.z, type);
+    }
+
     const normal = hit.normal ?? new THREE.Vector3(0, 1, 0);
     const x = Math.floor(hit.position.x + normal.x);
     const y = Math.floor(hit.position.y + normal.y);
     const z = Math.floor(hit.position.z + normal.z);
 
-    if (this.getBlock(x, y, z)) return false;
+    const existing = this.getBlock(x, y, z);
+    if (existing && existing !== 'water') return false; // water can be built over
     return this.setBlock(x, y, z, type);
   }
 
@@ -472,20 +487,26 @@ export class World extends THREE.Group {
     this.clearMeshes();
 
     const blocksByType = new Map(Object.keys(BLOCK_TYPES).map((type) => [type, []]));
+    const waterTops = [];
     for (const [key, type] of this.blocks) {
-      const position = parseBlockKey(key);
-      if (this.isRenderableBlock(position[0], position[1], position[2], type)) {
-        blocksByType.get(type)?.push(position);
+      const [x, y, z] = parseBlockKey(key);
+      if (type === 'water') {
+        // Only the surface of each water column is drawn (as a flat sheet).
+        if (this.getBlock(x, y + 1, z) !== 'water') waterTops.push([x, y, z]);
+        continue;
+      }
+      if (this.isRenderableBlock(x, y, z, type)) {
+        blocksByType.get(type)?.push([x, y, z]);
       }
     }
 
     const matrix = new THREE.Matrix4();
     for (const [type, positions] of blocksByType) {
-      if (positions.length === 0) continue;
+      if (type === 'water' || positions.length === 0) continue;
 
       const mesh = new THREE.InstancedMesh(this.geometry, this.materials.get(type), positions.length);
       mesh.name = `World:${type}`;
-      mesh.castShadow = type !== 'water';
+      mesh.castShadow = true;
       mesh.receiveShadow = true;
 
       positions.forEach(([x, y, z], index) => {
@@ -496,6 +517,19 @@ export class World extends THREE.Group {
       mesh.instanceMatrix.needsUpdate = true;
       this.meshes.set(type, mesh);
       this.add(mesh);
+    }
+
+    if (waterTops.length > 0) {
+      const water = new THREE.InstancedMesh(this.waterGeometry, this.materials.get('water'), waterTops.length);
+      water.name = 'World:water';
+      water.receiveShadow = true;
+      waterTops.forEach(([x, y, z], index) => {
+        matrix.makeTranslation(x + 0.5, y + 0.96, z + 0.5);
+        water.setMatrixAt(index, matrix);
+      });
+      water.instanceMatrix.needsUpdate = true;
+      this.meshes.set('water', water);
+      this.add(water);
     }
   }
 
@@ -526,6 +560,7 @@ export class World extends THREE.Group {
   dispose() {
     this.clearMeshes();
     this.geometry.dispose();
+    this.waterGeometry.dispose();
     for (const material of this.materials.values()) {
       material.dispose();
     }

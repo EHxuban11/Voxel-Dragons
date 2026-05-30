@@ -276,6 +276,8 @@ export const BALANCE = deepFreeze({
     health: 22, // less than a zombie (30); the fire tornado (24 total) kills them
     speed: 3.0,
     shootRange: 18,
+    keepMin: 9, // retreat when the player is closer than this
+    keepMax: 15, // follow when the player is farther than this
     shootCooldown: 2.0,
     arrowSpeed: 24,
     arrowDamage: 6,
