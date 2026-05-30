@@ -137,6 +137,22 @@ export const BALANCE = deepFreeze({
       flashColor: 0x54d2ff,
     },
     {
+      id: 'pistol',
+      name: 'Pistola',
+      damage: 12,
+      range: 70,
+      fireRate: 4, // half the rifle's cadence
+      clipSize: 12,
+      reserveAmmo: 0,
+      reloadTime: 1.0,
+      pellets: 1,
+      spread: 0.02,
+      automatic: true,
+      projectile: false,
+      infiniteAmmo: true,
+      flashColor: 0xfff0a0,
+    },
+    {
       id: 'dagger',
       name: 'Daga',
       damage: 26,
@@ -177,8 +193,46 @@ export const BALANCE = deepFreeze({
     sweepRange: 9, // reach of the giant sweep
     sweepArcCos: -0.25, // very wide frontal arc
     sweepDamageMult: 2, // double a normal slash
-    aoeRadius: 9, // radius of the circular area attack
+    aoeRadius: 18, // radius of the circular area attack (greatly increased)
     aoeDamageMult: 4, // big damage
+  },
+
+  katana: {
+    damage: 28, // less than the sword (40)
+    cooldown: 0.9,
+    range: 4.2,
+    arcCos: 0.3,
+    buffDamageMult: 2, // basic attacks hit much harder while buffed
+    buffCooldown: 0.35, // and much faster
+    buffDuration: 10,
+    parryRadius: 5.5,
+    parryKnockback: 4,
+    parryInvuln: 0.6,
+    dashMaxCharge: 3.0,
+    dashSpeed: 42,
+    dashMinLength: 5,
+    dashMaxLength: 12,
+    dashMinWidth: 2,
+    dashMaxWidth: 4,
+    dashMinDamage: 60,
+    dashMaxDamage: 180,
+  },
+
+  bomb: {
+    startCount: 2,
+    waveRefill: 2, // extra bombs granted at the shop wave
+    fuse: 1.5, // seconds before it blows
+    radius: 7.5, // small enough that only a dash escapes it
+    damage: 70, // to enemies
+    playerDamage: 50, // to the hunter if caught in the blast
+  },
+
+  aerial: {
+    duration: 2.0, // seconds in the top-down view (invulnerable)
+    slashDuration: 0.5, // burst of slashes afterwards
+    radius: 4, // circle radius around the player
+    damage: 80, // dealt to enemies inside the circle
+    cooldown: 30,
   },
 
   guard: {

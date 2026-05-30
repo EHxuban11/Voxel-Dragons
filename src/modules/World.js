@@ -165,6 +165,29 @@ export class World extends THREE.Group {
     this.rebuildMeshes();
   }
 
+  generateFlat(top = 5) {
+    this.clearMeshes();
+    this.blocks.clear();
+    this.flatTop = top;
+
+    const { width, depth } = this.options;
+    const halfWidth = Math.floor(width / 2);
+    const halfDepth = Math.floor(depth / 2);
+
+    for (let x = -halfWidth; x < width - halfWidth; x += 1) {
+      for (let z = -halfDepth; z < depth - halfDepth; z += 1) {
+        for (let y = 0; y <= top; y += 1) {
+          let type = 'stone';
+          if (y === top) type = 'grass';
+          else if (y >= top - 2) type = 'dirt';
+          this.setBlock(x, y, z, type, false);
+        }
+      }
+    }
+
+    this.rebuildMeshes();
+  }
+
   generateTrees() {
     const { width, depth, seed, waterLevel } = this.options;
     const halfWidth = Math.floor(width / 2);

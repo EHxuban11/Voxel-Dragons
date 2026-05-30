@@ -43,25 +43,77 @@ function anchor(group, x, y, z) {
 export function buildDagger() {
   const g = new THREE.Group();
 
-  const handle = box(0.06, 0.06, 0.22, 0x4a342a); // grip
-  handle.position.z = 0.14;
+  const pommel = box(0.07, 0.07, 0.05, 0x6b5030, { metalness: 0.5 });
+  pommel.position.z = 0.27;
+  g.add(pommel);
+
+  const handle = box(0.045, 0.05, 0.2, 0x3a2a1e, { roughness: 0.85 }); // grip
+  handle.position.z = 0.15;
   g.add(handle);
 
-  const guard = box(0.22, 0.05, 0.05, 0x8a8f99, { metalness: 0.6 }); // crossguard
-  guard.position.z = 0.03;
+  const guard = box(0.2, 0.05, 0.06, 0x9aa0aa, { metalness: 0.7 }); // crossguard
+  guard.position.z = 0.04;
   g.add(guard);
 
-  const blade = box(0.05, 0.02, 0.42, 0xc9d2dc, { metalness: 0.8, roughness: 0.3 });
-  blade.position.z = -0.2;
-  g.add(blade);
+  // Tapered blade: wider near the guard, narrowing toward the tip.
+  const bladeBase = box(0.075, 0.026, 0.2, 0xd4dce6, { metalness: 0.85, roughness: 0.25 });
+  bladeBase.position.z = -0.09;
+  g.add(bladeBase);
 
-  const tip = box(0.05, 0.02, 0.12, 0xeef3f8, { metalness: 0.85, roughness: 0.25 });
+  const bladeMid = box(0.05, 0.022, 0.18, 0xe2e9f1, { metalness: 0.88, roughness: 0.22 });
+  bladeMid.position.z = -0.27;
+  g.add(bladeMid);
+
+  // Sharp point.
+  const tip = cylinder(0.0, 0.035, 0.16, 0xf4f8fc, { metalness: 0.9, roughness: 0.16, segments: 4 });
+  tip.rotation.x = -Math.PI / 2;
   tip.position.z = -0.45;
-  tip.rotation.y = Math.PI / 4; // tiny diamond tip
   g.add(tip);
 
-  g.rotation.x = -0.18;
+  // Central fuller / ridge highlight.
+  const ridge = box(0.013, 0.03, 0.46, 0xf8fbfe, { metalness: 0.92, roughness: 0.14 });
+  ridge.position.z = -0.2;
+  g.add(ridge);
+
+  g.rotation.x = -0.16;
   return anchor(g, 0.28, -0.26, -0.55);
+}
+
+export function buildKatana(drawn = false) {
+  const g = new THREE.Group();
+
+  // Tsuka (wrapped grip).
+  const handle = box(0.06, 0.06, 0.3, 0x1b1b22, { metalness: 0.2, roughness: 0.85 });
+  handle.position.z = 0.18;
+  g.add(handle);
+
+  // Tsuba (guard).
+  const tsuba = box(0.16, 0.16, 0.04, 0x2a2a2a, { metalness: 0.7 });
+  tsuba.position.z = 0.02;
+  g.add(tsuba);
+
+  if (drawn) {
+    // Bare curved blade.
+    const blade = box(0.045, 0.06, 0.95, 0xeef2f7, { metalness: 0.92, roughness: 0.14 });
+    blade.position.z = -0.46;
+    blade.rotation.x = 0.05;
+    g.add(blade);
+    const edge = box(0.014, 0.062, 0.95, 0xffffff, { metalness: 0.95, roughness: 0.1 });
+    edge.position.set(0.02, 0, -0.46);
+    edge.rotation.x = 0.05;
+    g.add(edge);
+  } else {
+    // Sheathed: dark lacquered scabbard (saya) covering the blade.
+    const saya = box(0.085, 0.095, 0.92, 0x14223a, { metalness: 0.3, roughness: 0.5 });
+    saya.position.z = -0.44;
+    g.add(saya);
+    const koiguchi = box(0.1, 0.11, 0.06, 0x0e0e0e, { metalness: 0.6 });
+    koiguchi.position.z = 0.0;
+    g.add(koiguchi);
+  }
+
+  g.rotation.x = -0.14;
+  return anchor(g, 0.32, -0.28, -0.6);
 }
 
 export function buildSword() {
@@ -155,6 +207,30 @@ export function buildShotgun() {
   return anchor(g, 0.34, -0.3, -0.7);
 }
 
+export function buildPistol() {
+  const g = new THREE.Group();
+
+  const slide = box(0.09, 0.11, 0.34, 0x2a2e35, { metalness: 0.6 });
+  slide.position.z = -0.12;
+  g.add(slide);
+
+  const barrel = cylinder(0.025, 0.025, 0.14, 0x16191e, { metalness: 0.7 });
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.02, -0.32);
+  g.add(barrel);
+
+  const grip = box(0.09, 0.2, 0.1, 0x23272e);
+  grip.position.set(0, -0.16, 0.06);
+  grip.rotation.x = -0.32;
+  g.add(grip);
+
+  const trigger = box(0.03, 0.06, 0.04, 0x15181d);
+  trigger.position.set(0, -0.06, -0.02);
+  g.add(trigger);
+
+  return anchor(g, 0.32, -0.26, -0.6);
+}
+
 export function buildBlaster() {
   const g = new THREE.Group();
 
@@ -207,8 +283,11 @@ export function buildViewmodel(kind) {
     case 'rifle': return buildRifle();
     case 'shotgun': return buildShotgun();
     case 'blaster': return buildBlaster();
+    case 'pistol': return buildPistol();
     case 'dagger': return buildDagger();
     case 'sword': return buildSword();
+    case 'katana': return buildKatana(false);
+    case 'katana-drawn': return buildKatana(true);
     default: return null;
   }
 }

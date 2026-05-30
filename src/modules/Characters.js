@@ -37,6 +37,17 @@ export const CHARACTERS = [
     shield: 50,
     speedMult: 1.0, // fast
   },
+  {
+    id: 'samurai',
+    name: 'Samurai',
+    emoji: '🗡️',
+    loadout: 'katana', // melee katana with a parry-buff and a dash strike
+    canPlaceBlocks: false,
+    ability: 'samurai',
+    health: 120,
+    shield: 40,
+    speedMult: 0.9,
+  },
 ];
 
 export function getCharacter(id) {

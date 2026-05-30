@@ -171,7 +171,7 @@ export class Weapons {
     const targets = context.targets ?? this.targets;
     const hits = [];
 
-    weapon.ammo -= 1;
+    if (!weapon.infiniteAmmo) weapon.ammo -= 1;
     weapon.cooldownRemaining = 1 / Math.max(weapon.fireRate, 0.001);
 
     this._spawnMuzzleFlash(origin, direction, weapon, { ...context, scene });

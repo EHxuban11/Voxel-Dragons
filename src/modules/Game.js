@@ -28,6 +28,9 @@ export class Game {
     this.root.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 900);
+    this.activeCamera = this.camera;
+    this.aerialCamera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 900);
+    this.aerialCamera.up.set(0, 0, -1); // north stays up in the top-down view
     this.input = new Input({ target: this.renderer.domElement });
     this.audio = new GameAudio();
     this.effects = new Effects(this.scene);
@@ -78,11 +81,13 @@ export class Game {
     this.dragons = new DragonManager(this.scene, {
       count: 0,
       camera: this.camera,
+      world: this.world,
       bounds,
       reflectDamage: BALANCE.guard.reflectDamage,
     });
     this.zombies = new ZombieManager(this.scene, {
       bounds,
+      camera: this.camera,
       health: BALANCE.zombies.health,
       speed: BALANCE.zombies.speed,
       damage: BALANCE.zombies.damage,
@@ -120,11 +125,29 @@ export class Game {
     this.swordCharge = 0;
     this.viewmodel = null;
 
+    // Hunter hotbar abilities.
+    this.bombs = [];
+    this.aerialActive = false;
+    this.aerialTimer = 0;
+    this.aerialCooldown = 0;
+    this.slashTimer = 0;
+    this.aerialCenter = new THREE.Vector3();
+    this.aerialCircle = null;
+
     // Run progression / economy.
     this.coins = 0;
     this.hasRevive = true; // the heart; consumed on first death
     this.buffs = { damage: 0, speed: 0, health: 0, shield: 0 };
-    this.meleeDamage = BALANCE.sword.damage;
+    this.meleeDamage = this.character.loadout === 'katana' ? BALANCE.katana.damage : BALANCE.sword.damage;
+
+    // Samurai parry-buff + dash state.
+    this.samuraiBuffActive = false;
+    this.samuraiBuffTimer = 0;
+    this.parryInvulnTimer = 0;
+    this.samuraiDashCharging = false;
+    this.samuraiDashCharge = 0;
+    this.samuraiAwaitRelease = false;
+    this.altPrevHeld = false;
     this.shop = null;
     this.shopDone = false;
     this.victory = false;
@@ -156,6 +179,11 @@ export class Game {
     }
   }
 
+  grantWaveBombs() {
+    const bombSlot = this.inventory.slots.find((slot) => slot.abilityId === 'bomb');
+    if (bombSlot) bombSlot.count = (bombSlot.count ?? 0) + BALANCE.bomb.waveRefill;
+  }
+
   addBoundaryBarrier() {
     const { minX, maxX, minZ, maxZ } = this.playerBounds;
     const width = maxX - minX;
@@ -180,6 +208,7 @@ export class Game {
     // where you are handed reserve ammo for the guns.
     if (this.wave === BALANCE.progression.shopWave && !this.shopDone) {
       this.grantWaveAmmo();
+      this.grantWaveBombs();
       this.openShop();
     }
 
@@ -239,10 +268,41 @@ export class Game {
       return;
     }
 
+    // Hunter aerial view: top-down, the player is frozen and invulnerable while
+    // the world keeps running, then a slash burst resolves it.
+    if (this.aerialActive) {
+      this.aerialTimer -= delta;
+      // The player can still move (attacks/abilities are disabled); the camera
+      // and the circle follow them from above.
+      this.player.update(delta, this.input, this.world);
+      this.clampPlayerToBounds();
+      this.aerialCenter.copy(this.player.object.position);
+      if (this.aerialCircle) {
+        this.aerialCircle.position.copy(this.aerialCenter);
+        this.aerialCircle.position.y += 0.12;
+      }
+      this.world.update(delta);
+      this.dragons.update(delta, this.player, this.scene);
+      this.zombies.update(delta, this.player, this.world);
+      this.handleZombieEvents();
+      this.handleDragonFireballs(delta);
+      this.updateBombs(delta);
+      this.weapons.update(delta);
+      this.effects.update(delta);
+      this.updateAerialCamera();
+      if (this.aerialTimer <= 0) this.endAerial();
+      this.renderHud();
+      this.renderer.render(this.scene, this.activeCamera);
+      this.input.update();
+      return;
+    }
+
     this.meleeCooldown = Math.max(0, this.meleeCooldown - delta);
     this.guardCooldown = Math.max(0, this.guardCooldown - delta);
     this.dashCooldown = Math.max(0, this.dashCooldown - delta);
+    this.aerialCooldown = Math.max(0, this.aerialCooldown - delta);
     this.player.updateGuard(delta);
+    this.updateSamuraiState(delta);
 
     if (this.input.consume('reload')) {
       this.weapons.reload();
@@ -266,13 +326,21 @@ export class Game {
       }
     }
     // Right click and the F key both trigger the character's secondary action.
-    if (this.input.consume('alternate')) {
+    const altQueued = this.input.consume('alternate');
+    if (this.character.ability === 'samurai') {
+      this.handleSamuraiSecondary(delta);
+    } else if (altQueued) {
       this.useSecondaryAction();
     }
-    // Debug: P clears the round's enemies, jumping to the next wave.
+    // Debug: P clears the round's enemies, jumping to the next wave. Once the
+    // run is won, P instead drops you into a training ground of static zombies.
     if (this.input.consume('debugSkipWave')) {
-      this.dragons.clearDragons();
-      this.zombies.clearZombies();
+      if (this.victory) {
+        this.enterTrainingGround();
+      } else {
+        this.dragons.clearDragons();
+        this.zombies.clearZombies();
+      }
     }
 
     this.player.update(delta, this.input, this.world);
@@ -290,13 +358,18 @@ export class Game {
       this.advanceWave();
     }
     this.weapons.update(delta);
+    this.updateBombs(delta);
+    this.updateSlashPhase(delta);
     this.effects.update(delta);
 
-    // Left click and the E key both attack.
+    // Left click and the E key both attack / use the selected item.
     const attackClicked = this.input.consume('attack');
     const attacking = this.input.pointerLocked && (this.input.isDown('Mouse0') || this.input.isDown('KeyE'));
     const attackSlot = this.inventory.selectedSlot;
-    if (attackSlot?.kind === 'melee') {
+    if (attackSlot?.kind === 'melee' && this.character.loadout === 'katana') {
+      // Samurai katana: simple slash (faster/stronger while buffed).
+      if (attacking) this.meleeAttack();
+    } else if (attackSlot?.kind === 'melee') {
       // Knight sword: hold to charge a stronger attack, release to swing.
       if (attacking) {
         this.swordCharging = true;
@@ -307,13 +380,12 @@ export class Game {
         this.swordCharge = 0;
       }
       this.updateSwordChargeVisual();
-    } else if (attacking) {
-      if (attackSlot?.kind === 'weapon') {
-        this.handleFire();
-      }
-    }
-    if (this.input.pointerLocked && attackClicked && attackSlot?.kind === 'block') {
-      this.mineTargetBlock();
+    } else if (attackSlot?.kind === 'weapon') {
+      if (attacking) this.handleFire();
+    } else if (attackSlot?.kind === 'ability') {
+      if (this.input.pointerLocked && attackClicked) this.useAbility(attackSlot);
+    } else if (attackSlot?.kind === 'block') {
+      if (this.input.pointerLocked && attackClicked) this.mineTargetBlock();
     }
 
     this.handleDragonFireballs(delta);
@@ -324,11 +396,19 @@ export class Game {
 
     this.updateTargetOutline();
     this.effects.applyCameraShake(this.camera);
+    this.renderHud();
+
+    this.renderer.render(this.scene, this.activeCamera);
+    this.input.update();
+  }
+
+  renderHud() {
     const selectedSlot = this.inventory.selectedSlot;
     const isMelee = selectedSlot?.kind === 'melee';
     const weaponId = selectedSlot?.kind === 'weapon' ? this.weapons.currentWeapon?.id : null;
     const isGun = Boolean(weaponId) && weaponId !== 'dagger';
     const ammoState = this.weapons.getAmmoState(true);
+    const infiniteAmmo = this.weapons.currentWeapon?.infiniteAmmo;
     this.hud.update({
       health: this.player.health,
       maxHealth: this.player.maxHealth,
@@ -336,8 +416,8 @@ export class Game {
       maxShield: this.player.maxShield,
       ammo: ammoState,
       // Only the duck's guns show ammo (clip / reserve). Sword and dagger hide it.
-      ammoText: isGun ? `${ammoState.ammo} / ${ammoState.reserveAmmo}` : '',
-      weapon: isMelee ? selectedSlot.label : this.weapons.getCurrentWeaponName(),
+      ammoText: isGun ? (infiniteAmmo ? '∞' : `${ammoState.ammo} / ${ammoState.reserveAmmo}`) : '',
+      weapon: isMelee ? selectedSlot.label : (selectedSlot?.kind === 'ability' ? selectedSlot.label : this.weapons.getCurrentWeaponName()),
       dragons: this.dragons.getAliveCount(),
       dragonsTotal: this.dragons.dragons.length,
       zombies: this.zombies.getAliveCount(),
@@ -349,9 +429,6 @@ export class Game {
       inventory: this.inventory.snapshot(),
       locked: this.input.pointerLocked
     });
-
-    this.renderer.render(this.scene, this.camera);
-    this.input.update();
   }
 
   clampPlayerToBounds() {
@@ -370,7 +447,22 @@ export class Game {
 
   triggerVictory() {
     this.victory = true;
-    this.hud.showMessage('¡Has ganado! 🎉', 6000);
+    this.hud.showMessage('¡Has ganado! 🎉 Pulsa P para el campo de entrenamiento', 8000);
+  }
+
+  enterTrainingGround() {
+    this.dragons.clearDragons();
+
+    // Flat arena, then place the player and the practice targets.
+    this.world.generateFlat(5);
+    const top = this.world.flatTop ?? 5;
+    this.player.revive();
+    this.player.setPosition(0, top + 2, 16);
+    this.player.cameraHolder.rotation.y = 0; // face the rows (-Z)
+    this.player.pitchHolder.rotation.x = 0;
+
+    this.zombies.spawnTrainingGround(this.player, this.world);
+    this.hud.showMessage('Campo de entrenamiento', 2000);
   }
 
   handlePlayerDeath() {
@@ -479,16 +571,122 @@ export class Game {
 
   meleeAttack() {
     if (this.meleeCooldown > 0) return;
-    this.meleeCooldown = BALANCE.sword.cooldown;
+
+    const katana = this.character.loadout === 'katana';
+    const buffed = katana && this.samuraiBuffActive;
+    this.meleeCooldown = katana
+      ? (buffed ? BALANCE.katana.buffCooldown : BALANCE.katana.cooldown)
+      : BALANCE.sword.cooldown;
+    const range = katana ? BALANCE.katana.range : BALANCE.sword.range;
+    const arcCos = katana ? BALANCE.katana.arcCos : BALANCE.sword.arcCos;
+    const damage = buffed ? this.meleeDamage * BALANCE.katana.buffDamageMult : this.meleeDamage;
+    const color = buffed ? 0xff6a3c : 0xffffff;
+    const sizeMult = buffed ? 1.25 : 1;
 
     const origin = this.getCameraWorldPosition();
     const direction = this.getLookDirection();
-    const { range, arcCos } = BALANCE.sword;
-    const damage = this.meleeDamage;
-
     const zombieHits = this.zombies.hitMelee(origin, direction, range, damage, arcCos);
     const dragonHits = this.dragons.hitMelee(origin, direction, range, damage, arcCos);
-    this.applyMeleeHits(zombieHits, dragonHits, 0xffffff, 1);
+    this.applyMeleeHits(zombieHits, dragonHits, color, sizeMult);
+  }
+
+  getForwardHorizontal() {
+    const yaw = this.player.cameraHolder.rotation.y;
+    return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+  }
+
+  updateSamuraiState(delta) {
+    if (this.parryInvulnTimer > 0) {
+      this.parryInvulnTimer -= delta;
+      if (this.parryInvulnTimer <= 0) {
+        this.parryInvulnTimer = 0;
+        this.player.invulnerable = false;
+      }
+    }
+    if (this.samuraiBuffActive) {
+      this.samuraiBuffTimer -= delta;
+      if (this.samuraiBuffTimer <= 0) {
+        this.samuraiBuffActive = false;
+        this.samuraiBuffTimer = 0;
+        this.updateViewmodel(); // re-sheathe when the buff expires
+      }
+    }
+  }
+
+  handleSamuraiSecondary(delta) {
+    const altHeld = this.input.pointerLocked && (this.input.isDown('Mouse2') || this.input.isDown('KeyF'));
+    const altPressed = altHeld && !this.altPrevHeld;
+    const altReleased = !altHeld && this.altPrevHeld;
+
+    if (!this.samuraiBuffActive) {
+      if (altPressed) {
+        this.samuraiParry();
+        this.samuraiAwaitRelease = true; // don't immediately start charging a dash
+      }
+    } else if (this.samuraiAwaitRelease) {
+      if (altReleased) this.samuraiAwaitRelease = false;
+    } else if (altHeld) {
+      this.samuraiDashCharging = true;
+      this.samuraiDashCharge = Math.min(this.samuraiDashCharge + delta, BALANCE.katana.dashMaxCharge);
+    } else if (this.samuraiDashCharging) {
+      this.samuraiDash(this.samuraiDashCharge);
+      this.samuraiDashCharging = false;
+      this.samuraiDashCharge = 0;
+    }
+
+    this.altPrevHeld = altHeld;
+  }
+
+  samuraiParry() {
+    this.samuraiBuffActive = true;
+    this.samuraiBuffTimer = BALANCE.katana.buffDuration;
+    this.parryInvulnTimer = BALANCE.katana.parryInvuln;
+    this.player.invulnerable = true;
+
+    const center = this.player.object.position;
+    this.zombies.knockback(center, BALANCE.katana.parryRadius, BALANCE.katana.parryKnockback, this.world);
+    this.dragons.knockback(center, BALANCE.katana.parryRadius, BALANCE.katana.parryKnockback);
+
+    this.effects.shockwave(center.clone(), BALANCE.katana.parryRadius, 0x9fd0ff);
+    this.audio.reload();
+    this.hud.showMessage('¡Postura! Ataques potenciados 10s', 1500);
+    this.updateViewmodel(); // unsheathe the katana
+  }
+
+  samuraiDash(charge) {
+    const k = BALANCE.katana;
+    const t = Math.min(charge / k.dashMaxCharge, 1);
+    const length = THREE.MathUtils.lerp(k.dashMinLength, k.dashMaxLength, t);
+    const halfWidth = THREE.MathUtils.lerp(k.dashMinWidth, k.dashMaxWidth, t) / 2;
+    const damage = THREE.MathUtils.lerp(k.dashMinDamage, k.dashMaxDamage, t);
+
+    const origin = this.player.object.position.clone();
+    const forward = this.getForwardHorizontal();
+    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+
+    // Dash forward (stops at walls via the player's collision).
+    this.player.lastMoveDir.copy(forward);
+    this.player.startDash(length, k.dashSpeed);
+
+    this.zombies.hitBox(origin, forward, right, length, halfWidth, damage);
+    this.dragons.hitBox(origin, forward, right, length, halfWidth, damage);
+
+    const slashes = Math.round(length * 2.4);
+    for (let i = 0; i < slashes; i += 1) {
+      const along = (i / slashes) * length + (Math.random() - 0.5);
+      const side = (Math.random() - 0.5) * 2 * halfWidth;
+      const pos = origin.clone()
+        .addScaledVector(forward, Math.max(0, along))
+        .addScaledVector(right, side);
+      pos.y += 0.6 + Math.random() * 1.8;
+      this.effects.slashMark(pos, 1.4 + Math.random() * 0.9, 0xffffff);
+    }
+    this.audio.explosion();
+
+    // The strike consumes the buff.
+    this.samuraiBuffActive = false;
+    this.samuraiBuffTimer = 0;
+    this.updateViewmodel(); // re-sheathe
   }
 
   releaseSwordAttack(charge) {
@@ -567,6 +765,7 @@ export class Game {
   handleZombieEvents() {
     for (const event of this.zombies.consumeEvents()) {
       if (event.type === 'attack') {
+        if (this.player.invulnerable) continue;
         this.player.damage(event.damage);
         this.hud.flashDamage();
         this.audio.damage();
@@ -598,12 +797,14 @@ export class Game {
     const slot = this.inventory.selectedSlot;
     let kind = null;
     if (slot?.kind === 'melee') {
-      kind = 'sword';
+      kind = slot.model || 'sword';
+      if (kind === 'katana' && this.samuraiBuffActive) kind = 'katana-drawn';
     } else if (slot?.kind === 'weapon') {
       const label = (slot.label ?? '').toLowerCase();
       if (label.includes('rifle')) kind = 'rifle';
       else if (label.includes('shotgun')) kind = 'shotgun';
       else if (label.includes('blaster')) kind = 'blaster';
+      else if (label.includes('pistola')) kind = 'pistol';
       else if (label.includes('daga')) kind = 'dagger';
     }
 
@@ -636,6 +837,150 @@ export class Game {
     }
   }
 
+  useAbility(slot) {
+    if (slot.abilityId === 'bomb') {
+      if ((slot.count ?? 0) > 0) {
+        this.placeBomb();
+        slot.count -= 1;
+      }
+    } else if (slot.abilityId === 'aerial') {
+      this.activateAerial();
+    }
+  }
+
+  placeBomb() {
+    const pos = this.player.object.position.clone();
+    pos.y += 0.4;
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.SphereGeometry(0.4, 12, 12),
+      new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.6 }),
+    );
+    const fuse = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.05, 0.26, 6),
+      new THREE.MeshBasicMaterial({ color: 0xff4040 }),
+    );
+    fuse.position.y = 0.4;
+    group.add(body, fuse);
+    group.position.copy(pos);
+    this.scene.add(group);
+    this.bombs.push({ position: pos, timer: BALANCE.bomb.fuse, mesh: group, blink: 0 });
+    this.audio.reload();
+  }
+
+  updateBombs(delta) {
+    for (let i = this.bombs.length - 1; i >= 0; i -= 1) {
+      const bomb = this.bombs[i];
+      bomb.timer -= delta;
+      bomb.blink += delta;
+      const fuse = bomb.mesh.children[1];
+      const rate = Math.max(0.05, bomb.timer * 0.22);
+      fuse.material.color.setHex(Math.sin(bomb.blink / rate) > 0 ? 0xff2020 : 0xffd060);
+      bomb.mesh.scale.setScalar(1 + Math.sin(bomb.blink * 14) * 0.06);
+
+      if (bomb.timer <= 0) {
+        this.explodeBomb(bomb);
+        this.scene.remove(bomb.mesh);
+        bomb.mesh.traverse((child) => {
+          child.geometry?.dispose?.();
+          child.material?.dispose?.();
+        });
+        this.bombs.splice(i, 1);
+      }
+    }
+  }
+
+  explodeBomb(bomb) {
+    const { radius, damage, playerDamage } = BALANCE.bomb;
+    const center = bomb.position;
+    this.effects.explosion(center);
+    this.audio.explosion();
+
+    const dir = new THREE.Vector3(1, 0, 0);
+    this.zombies.hitMelee(center, dir, radius, damage, -1);
+    this.dragons.hitMelee(center, dir, radius, damage, -1);
+
+    if (this.player.object.position.distanceTo(center) <= radius) {
+      this.player.damage(playerDamage);
+      if (!this.player.invulnerable) {
+        this.hud.flashDamage();
+        this.audio.damage();
+      }
+    }
+  }
+
+  activateAerial() {
+    if (this.aerialActive || this.aerialCooldown > 0) return;
+    this.aerialActive = true;
+    this.aerialTimer = BALANCE.aerial.duration;
+    this.aerialCenter.copy(this.player.object.position);
+    this.player.invulnerable = true;
+    this.activeCamera = this.aerialCamera;
+    this.showAerialCircle();
+  }
+
+  showAerialCircle() {
+    this.removeAerialCircle();
+    const geometry = new THREE.CircleGeometry(BALANCE.aerial.radius, 48);
+    geometry.rotateX(-Math.PI / 2);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x66ccff,
+      transparent: true,
+      opacity: 0.32,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.aerialCircle = new THREE.Mesh(geometry, material);
+    this.aerialCircle.position.copy(this.aerialCenter);
+    this.aerialCircle.position.y += 0.12;
+    this.scene.add(this.aerialCircle);
+  }
+
+  removeAerialCircle() {
+    if (this.aerialCircle) {
+      this.scene.remove(this.aerialCircle);
+      this.aerialCircle.geometry.dispose();
+      this.aerialCircle.material.dispose();
+      this.aerialCircle = null;
+    }
+  }
+
+  updateAerialCamera() {
+    const c = this.aerialCenter;
+    this.aerialCamera.position.set(c.x, c.y + 28, c.z);
+    this.aerialCamera.lookAt(c.x, c.y, c.z);
+    this.aerialCamera.updateMatrixWorld();
+  }
+
+  endAerial() {
+    this.aerialActive = false;
+    this.activeCamera = this.camera;
+    this.player.invulnerable = false;
+    this.aerialCooldown = BALANCE.aerial.cooldown;
+    this.removeAerialCircle();
+
+    const dir = new THREE.Vector3(1, 0, 0);
+    this.zombies.hitMelee(this.aerialCenter, dir, BALANCE.aerial.radius, BALANCE.aerial.damage, -1);
+    this.dragons.hitMelee(this.aerialCenter, dir, BALANCE.aerial.radius, BALANCE.aerial.damage, -1);
+    this.audio.explosion();
+    this.slashTimer = BALANCE.aerial.slashDuration;
+  }
+
+  updateSlashPhase(delta) {
+    if (this.slashTimer <= 0) return;
+    this.slashTimer -= delta;
+    for (let i = 0; i < 3; i += 1) {
+      const angle = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * BALANCE.aerial.radius;
+      const pos = new THREE.Vector3(
+        this.aerialCenter.x + Math.cos(angle) * r,
+        this.aerialCenter.y + 0.6 + Math.random() * 1.8,
+        this.aerialCenter.z + Math.sin(angle) * r,
+      );
+      this.effects.slashMark(pos, 1.4 + Math.random() * 0.9, 0xffffff);
+    }
+  }
+
   mineTargetBlock() {
     if (!this.character.canPlaceBlocks) return;
     const hit = this.world.raycastBlock(this.getCameraWorldPosition(), this.getLookDirection(), BALANCE.world.interactionRange);
@@ -661,6 +1006,12 @@ export class Game {
   respawnPlayer() {
     this.player.revive();
     this.player.setPosition(...this.world.getSpawnPoint().toArray());
+    this.samuraiBuffActive = false;
+    this.samuraiBuffTimer = 0;
+    this.parryInvulnTimer = 0;
+    this.samuraiDashCharging = false;
+    this.samuraiDashCharge = 0;
+    this.updateViewmodel();
     this.hud.flashDamage();
     this.hud.showMessage('Has reaparecido', 1200);
   }
@@ -669,7 +1020,7 @@ export class Game {
     for (const ball of this.dragons.consumeImpacts()) {
       this.effects.explosion(ball.position);
       this.audio.explosion();
-      if (ball.hitPlayer && ball.damage > 0) {
+      if (ball.hitPlayer && ball.damage > 0 && !this.player.invulnerable) {
         this.player.damage(ball.damage);
         this.hud.flashDamage();
         this.audio.damage();
@@ -704,8 +1055,11 @@ export class Game {
   }
 
   resize() {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
+    const aspect = window.innerWidth / window.innerHeight;
+    this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    this.aerialCamera.aspect = aspect;
+    this.aerialCamera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   }
 
@@ -714,6 +1068,9 @@ export class Game {
     this.input.dispose?.();
     this.hud.destroy?.();
     this.shop?.hide?.();
+    this.removeAerialCircle();
+    for (const bomb of this.bombs) this.scene.remove(bomb.mesh);
+    this.bombs.length = 0;
     this.dragons.dispose?.();
     this.zombies.dispose?.();
     this.world.dispose?.();

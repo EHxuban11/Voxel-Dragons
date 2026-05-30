@@ -115,6 +115,9 @@ export class Player {
     this.guardActive = false;
     this.guardTimer = 0;
 
+    // Temporary invulnerability (e.g. hunter aerial view).
+    this.invulnerable = false;
+
     // Hunter dash state.
     this.lastMoveDir = new THREE.Vector3(0, 0, -1);
     this.dashDir = new THREE.Vector3();
@@ -309,6 +312,7 @@ export class Player {
   }
 
   damage(amount) {
+    if (this.invulnerable) return this.health;
     let remaining = Math.max(0, amount);
 
     if (this.shield > 0) {
@@ -330,6 +334,7 @@ export class Player {
     this.guardTimer = 0;
     this.dashActive = false;
     this.dashRemaining = 0;
+    this.invulnerable = false;
     this.velocity.set(0, 0, 0);
     return this;
   }

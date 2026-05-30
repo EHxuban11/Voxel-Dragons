@@ -20,11 +20,19 @@ function groundHeight(world, x, z, fallback = 0) {
 export class ZombieManager {
   constructor(scene = null, options = {}) {
     this.scene = scene?.isScene ? scene : null;
+    this.camera = options.camera ?? null;
     this.group = new THREE.Group();
     this.group.name = 'ZombieManager';
     this.zombies = [];
     this.events = [];
     this.elapsed = 0;
+
+    // Training-ground damage dummy.
+    this.dummy = null;
+    this.dummyLabel = null;
+    this.dummyTimer = 0;
+    this._lastDummyValue = -1;
+    this.tmpQuaternion = new THREE.Quaternion();
 
     this.bounds = { ...DEFAULT_BOUNDS, ...(options.bounds ?? {}) };
     this.health = options.health ?? 30;
@@ -108,6 +116,136 @@ export class ZombieManager {
     }
   }
 
+  spawnTrainingGround(player, world) {
+    this.clearZombies();
+    const center = getWorldPosition(player, this.tmpPlayer);
+    const yaw = player?.cameraHolder?.rotation?.y ?? 0;
+    const forwardX = -Math.sin(yaw);
+    const forwardZ = -Math.cos(yaw);
+    const rightX = Math.cos(yaw);
+    const rightZ = -Math.sin(yaw);
+
+    const rows = 3;
+    const perRow = 9;
+    const lateral = 1.8;
+    const rowGap = 4; // 4 blocks between rows
+    const startDist = 6;
+
+    let id = 0;
+    for (let r = 0; r < rows; r += 1) {
+      const dist = startDist + r * rowGap;
+      for (let i = 0; i < perRow; i += 1) {
+        const off = (i - (perRow - 1) / 2) * lateral;
+        const x = center.x + forwardX * dist + rightX * off;
+        const z = center.z + forwardZ * dist + rightZ * off;
+        this._spawnStaticZombie(id, x, z, yaw, world, false);
+        id += 1;
+      }
+    }
+
+    // Invincible damage dummy, set apart to the side.
+    const dummyX = center.x + forwardX * 8 + rightX * 13;
+    const dummyZ = center.z + forwardZ * 8 + rightZ * 13;
+    this.dummy = this._spawnStaticZombie(id, dummyX, dummyZ, yaw, world, true);
+    this.dummyTimer = 0;
+    this._lastDummyValue = -1;
+    this.dummyLabel = this._createDummyLabel();
+  }
+
+  _spawnStaticZombie(id, x, z, yaw, world, isDummy) {
+    const cx = THREE.MathUtils.clamp(x, this.bounds.minX, this.bounds.maxX);
+    const cz = THREE.MathUtils.clamp(z, this.bounds.minZ, this.bounds.maxZ);
+    const zombie = {
+      id,
+      health: isDummy ? Infinity : this.health,
+      maxHealth: isDummy ? Infinity : this.health,
+      speed: 0,
+      damage: 0,
+      attackTimer: Infinity,
+      static: true,
+      dummy: isDummy,
+      damageAccum: 0,
+      mesh: this.createZombieMesh(id),
+      dead: false,
+    };
+    zombie.mesh.position.set(cx, groundHeight(world, cx, cz), cz);
+    zombie.mesh.rotation.y = yaw + Math.PI; // face the player
+    zombie.mesh.userData.zombie = zombie;
+
+    if (isDummy) {
+      // Tint it gold so it reads as the special meter dummy.
+      zombie.mesh.traverse((child) => {
+        if (child.isMesh) {
+          child.material = child.material.clone();
+          child.material.color.setHex(0xd9b44a);
+        }
+      });
+    }
+
+    this.group.add(zombie.mesh);
+    this.zombies.push(zombie);
+    return zombie;
+  }
+
+  _createDummyLabel() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4, 2), material);
+    mesh.renderOrder = 1001;
+    mesh.frustumCulled = false;
+    mesh.userData.canvas = canvas;
+    mesh.userData.texture = texture;
+    this.group.add(mesh);
+    return mesh;
+  }
+
+  _drawDummyLabel(value) {
+    const canvas = this.dummyLabel.userData.canvas;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, 256, 128);
+    ctx.fillStyle = 'rgba(8, 12, 16, 0.6)';
+    ctx.fillRect(8, 8, 240, 112);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffe066';
+    ctx.font = 'bold 28px Arial';
+    ctx.fillText('Daño (10s)', 128, 36);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 60px Arial';
+    ctx.fillText(String(Math.round(value)), 128, 88);
+    this.dummyLabel.userData.texture.needsUpdate = true;
+  }
+
+  _updateDummy(dt) {
+    if (!this.dummy || this.dummy.dead || !this.dummyLabel) return;
+
+    this.dummyTimer += dt;
+    if (this.dummyTimer >= 10) {
+      this.dummyTimer = 0;
+      this.dummy.damageAccum = 0; // reset every 10 seconds
+    }
+
+    if (this.dummy.damageAccum !== this._lastDummyValue) {
+      this._drawDummyLabel(this.dummy.damageAccum);
+      this._lastDummyValue = this.dummy.damageAccum;
+    }
+
+    this.dummyLabel.position.copy(this.dummy.mesh.position);
+    this.dummyLabel.position.y += 3.6;
+    if (this.camera) {
+      this.camera.getWorldQuaternion(this.tmpQuaternion);
+      this.dummyLabel.quaternion.copy(this.tmpQuaternion);
+    }
+  }
+
   update(delta, player, world) {
     const dt = Math.min(delta || 0, 0.08);
     this.elapsed += dt;
@@ -116,6 +254,7 @@ export class ZombieManager {
 
     for (const zombie of this.zombies) {
       if (zombie.dead) continue;
+      if (zombie.static) continue; // training dummies never move or attack
 
       this.tmpDir.set(playerPos.x - zombie.mesh.position.x, 0, playerPos.z - zombie.mesh.position.z);
       const distance = this.tmpDir.length();
@@ -126,12 +265,25 @@ export class ZombieManager {
       }
 
       if (distance > this.attackRange) {
-        zombie.mesh.position.x += this.tmpDir.x * zombie.speed * dt;
-        zombie.mesh.position.z += this.tmpDir.z * zombie.speed * dt;
+        const nextX = THREE.MathUtils.clamp(
+          zombie.mesh.position.x + this.tmpDir.x * zombie.speed * dt,
+          this.bounds.minX,
+          this.bounds.maxX,
+        );
+        const nextZ = THREE.MathUtils.clamp(
+          zombie.mesh.position.z + this.tmpDir.z * zombie.speed * dt,
+          this.bounds.minZ,
+          this.bounds.maxZ,
+        );
+        // Zombies can only step up one block. A taller wall blocks them in that
+        // direction (they keep facing/trying, but can't pass).
+        const nextGround = groundHeight(world, nextX, nextZ);
+        if (nextGround - zombie.mesh.position.y <= 1.1) {
+          zombie.mesh.position.x = nextX;
+          zombie.mesh.position.z = nextZ;
+        }
       }
 
-      zombie.mesh.position.x = THREE.MathUtils.clamp(zombie.mesh.position.x, this.bounds.minX, this.bounds.maxX);
-      zombie.mesh.position.z = THREE.MathUtils.clamp(zombie.mesh.position.z, this.bounds.minZ, this.bounds.maxZ);
       zombie.mesh.position.y = groundHeight(world, zombie.mesh.position.x, zombie.mesh.position.z);
 
       // shamble bob
@@ -149,6 +301,8 @@ export class ZombieManager {
         zombie.attackTimer = this.attackCooldown;
       }
     }
+
+    this._updateDummy(dt);
   }
 
   // --- ranged hit support (guns) -------------------------------------------
@@ -179,16 +333,29 @@ export class ZombieManager {
     return { zombie, point: hits[0].point.clone(), distance: hits[0].distance };
   }
 
+  // Applies damage. The invincible training dummy just tallies the damage.
+  damageZombie(zombie, amount) {
+    if (zombie.dummy) {
+      zombie.damageAccum = (zombie.damageAccum || 0) + amount;
+      return false;
+    }
+    zombie.health = Math.max(0, zombie.health - amount);
+    if (zombie.health <= 0) {
+      this.killZombie(zombie);
+      return true;
+    }
+    return false;
+  }
+
   applyRayHit(peek, damage) {
     const zombie = peek.zombie;
-    zombie.health = Math.max(0, zombie.health - damage);
-    if (zombie.health <= 0) this.killZombie(zombie);
+    const killed = this.damageZombie(zombie, damage);
     return {
       dragon: null,
       zombie,
       point: peek.point,
       distance: peek.distance,
-      killed: zombie.dead,
+      killed,
       health: zombie.health,
     };
   }
@@ -224,9 +391,8 @@ export class ZombieManager {
       const zombie = this.zombies.find((candidate) => candidate.mesh === root);
       if (!zombie || zombie.dead || seen.has(zombie.id)) continue;
       seen.add(zombie.id);
-      zombie.health = Math.max(0, zombie.health - damage);
-      if (zombie.health <= 0) this.killZombie(zombie);
-      results.push({ dragon: null, zombie, point: intersection.point.clone(), distance: intersection.distance, killed: zombie.dead, health: zombie.health });
+      const killed = this.damageZombie(zombie, damage);
+      results.push({ dragon: null, zombie, point: intersection.point.clone(), distance: intersection.distance, killed, health: zombie.health });
     }
     return results;
   }
@@ -241,12 +407,39 @@ export class ZombieManager {
       if (distance > range || distance < 0.0001) continue;
       this.tmpDir.normalize();
       if (this.tmpDir.dot(direction) < arcCos) continue;
-      zombie.health = Math.max(0, zombie.health - damage);
-      const killed = zombie.health <= 0;
-      if (killed) this.killZombie(zombie);
+      const killed = this.damageZombie(zombie, damage);
       results.push({ position: zombie.mesh.position.clone(), killed });
     }
     return results;
+  }
+
+  hitBox(origin, forward, right, length, halfWidth, damage) {
+    const results = [];
+    const v = new THREE.Vector3();
+    for (const zombie of this.zombies) {
+      if (zombie.dead) continue;
+      v.subVectors(zombie.mesh.position, origin);
+      const f = v.dot(forward);
+      const lateral = Math.abs(v.dot(right));
+      if (f < -1 || f > length || lateral > halfWidth || Math.abs(v.y) > 5) continue;
+      const killed = this.damageZombie(zombie, damage);
+      results.push({ position: zombie.mesh.position.clone(), killed });
+    }
+    return results;
+  }
+
+  knockback(center, radius, force, world) {
+    for (const zombie of this.zombies) {
+      if (zombie.dead || zombie.static) continue;
+      const dx = zombie.mesh.position.x - center.x;
+      const dz = zombie.mesh.position.z - center.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > radius || dist < 0.0001) continue;
+      const inv = 1 / dist;
+      const nx = THREE.MathUtils.clamp(zombie.mesh.position.x + dx * inv * force, this.bounds.minX, this.bounds.maxX);
+      const nz = THREE.MathUtils.clamp(zombie.mesh.position.z + dz * inv * force, this.bounds.minZ, this.bounds.maxZ);
+      zombie.mesh.position.set(nx, groundHeight(world, nx, nz), nz);
+    }
   }
 
   killZombie(zombie) {
@@ -267,6 +460,17 @@ export class ZombieManager {
       this.group.remove(zombie.mesh);
     }
     this.zombies.length = 0;
+
+    if (this.dummyLabel) {
+      this.group.remove(this.dummyLabel);
+      this.dummyLabel.userData.texture?.dispose?.();
+      this.dummyLabel.material?.dispose?.();
+      this.dummyLabel.geometry?.dispose?.();
+      this.dummyLabel = null;
+    }
+    this.dummy = null;
+    this.dummyTimer = 0;
+    this._lastDummyValue = -1;
   }
 
   getAliveCount() {

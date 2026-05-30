@@ -2,25 +2,30 @@ const GUN_SLOTS = [
   { kind: 'weapon', weaponIndex: 0, label: 'Rifle', count: null, color: '#ffd166' },
   { kind: 'weapon', weaponIndex: 1, label: 'Shotgun', count: null, color: '#ff9f1c' },
   { kind: 'weapon', weaponIndex: 2, label: 'Blaster', count: null, color: '#54d2ff' },
+  { kind: 'weapon', weaponIndex: 3, label: 'Pistola', count: null, color: '#fff0a0' },
 ];
 
 const BLOCK_SLOTS = [
-  { kind: 'block', type: 'grass', label: 'Cesped', count: 32, color: '#58a548' },
-  { kind: 'block', type: 'dirt', label: 'Tierra', count: 48, color: '#8b5a2b' },
-  { kind: 'block', type: 'stone', label: 'Piedra', count: 48, color: '#7b7f86' },
-  { kind: 'block', type: 'sand', label: 'Arena', count: 24, color: '#d8c477' },
-  { kind: 'block', type: 'wood', label: 'Madera', count: 24, color: '#8a5a32' },
+  { kind: 'block', type: 'wood', label: 'Madera', count: 40, color: '#8a5a32' },
 ];
 
-const SWORD_SLOT = { kind: 'melee', label: 'Espada', count: null, color: '#d7dde6' };
-const DAGGER_SLOT = { kind: 'weapon', weaponIndex: 3, label: 'Daga', count: null, color: '#cfd6df' };
+const SWORD_SLOT = { kind: 'melee', model: 'sword', label: 'Espada', count: null, color: '#d7dde6' };
+const KATANA_SLOT = { kind: 'melee', model: 'katana', label: 'Katana', count: null, color: '#e8e2d0' };
+const DAGGER_SLOT = { kind: 'weapon', weaponIndex: 4, label: 'Daga', count: null, color: '#cfd6df' };
 
 function buildSlots(character) {
   if (character?.loadout === 'sword') {
     return [{ ...SWORD_SLOT }];
   }
+  if (character?.loadout === 'katana') {
+    return [{ ...KATANA_SLOT }];
+  }
   if (character?.loadout === 'dagger') {
-    return [{ ...DAGGER_SLOT }];
+    return [
+      { ...DAGGER_SLOT },
+      { kind: 'ability', abilityId: 'bomb', label: 'Bomba', count: 2, color: '#3b3b3b' },
+      { kind: 'ability', abilityId: 'aerial', label: 'ataque to guapo', count: null, color: '#66ccff' },
+    ];
   }
   // Default (duck): guns plus buildable blocks.
   const slots = GUN_SLOTS.map((slot) => ({ ...slot }));

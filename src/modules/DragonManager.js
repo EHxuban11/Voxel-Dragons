@@ -26,6 +26,7 @@ export class DragonManager {
 
     this.scene = scene;
     this.camera = options.camera ?? null;
+    this.world = options.world ?? null;
     this.group = new THREE.Group();
     this.group.name = 'DragonManager';
     this.dragons = [];
@@ -354,6 +355,12 @@ export class DragonManager {
     dragon.attackCooldown = THREE.MathUtils.lerp(3.2, 1.35, dragon.aggression);
   }
 
+  _fireballBlocked(position) {
+    if (!this.world || typeof this.world.getBlock !== 'function') return false;
+    const type = this.world.getBlock(Math.floor(position.x), Math.floor(position.y), Math.floor(position.z));
+    return Boolean(type) && type !== 'water';
+  }
+
   updateFireballs(delta, player, playerPosition) {
     for (let i = this.fireballs.length - 1; i >= 0; i -= 1) {
       const fireball = this.fireballs[i];
@@ -377,6 +384,13 @@ export class DragonManager {
         fireball.position.addScaledVector(data.velocity, delta);
         fireball.rotation.x += delta * 9;
 
+        if (this._fireballBlocked(fireball.position)) {
+          this.impacts.push({ position: fireball.position.clone(), damage: 0, hitPlayer: false });
+          this.group.remove(fireball);
+          this.fireballs.splice(i, 1);
+          continue;
+        }
+
         if (distance <= FIREBALL_COLLISION_RADIUS + 1.4) {
           target.health = Math.max(0, target.health - data.damage);
           const killed = target.health <= 0;
@@ -391,6 +405,14 @@ export class DragonManager {
       fireball.position.addScaledVector(data.velocity, delta);
       fireball.rotation.x += delta * 8;
       fireball.rotation.y += delta * 5;
+
+      // Terrain blocks the fireball.
+      if (this._fireballBlocked(fireball.position)) {
+        this.impacts.push({ position: fireball.position.clone(), damage: 0, hitPlayer: false });
+        this.group.remove(fireball);
+        this.fireballs.splice(i, 1);
+        continue;
+      }
 
       const hitPlayer = Boolean(player) && fireball.position.distanceTo(playerPosition) <= FIREBALL_COLLISION_RADIUS;
       const expired = data.life <= 0 || fireball.position.y < -2;
@@ -537,6 +559,36 @@ export class DragonManager {
     }
 
     return results;
+  }
+
+  hitBox(origin, forward, right, length, halfWidth, damage) {
+    const results = [];
+    const v = new THREE.Vector3();
+    for (const dragon of this.dragons) {
+      if (dragon.dead) continue;
+      v.subVectors(dragon.mesh.position, origin);
+      const f = v.dot(forward);
+      const lateral = Math.abs(v.dot(right));
+      if (f < -1 || f > length || lateral > halfWidth || Math.abs(v.y) > 5) continue;
+      dragon.health = Math.max(0, dragon.health - damage);
+      const killed = dragon.health <= 0;
+      if (killed) this.killDragon(dragon);
+      results.push({ position: dragon.mesh.position.clone(), killed });
+    }
+    return results;
+  }
+
+  knockback(center, radius, force) {
+    for (const dragon of this.dragons) {
+      if (dragon.dead) continue;
+      const dx = dragon.mesh.position.x - center.x;
+      const dz = dragon.mesh.position.z - center.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > radius || dist < 0.0001) continue;
+      const inv = 1 / dist;
+      dragon.mesh.position.x = THREE.MathUtils.clamp(dragon.mesh.position.x + dx * inv * force, this.bounds.minX, this.bounds.maxX);
+      dragon.mesh.position.z = THREE.MathUtils.clamp(dragon.mesh.position.z + dz * inv * force, this.bounds.minZ, this.bounds.maxZ);
+    }
   }
 
   killDragon(dragon) {
