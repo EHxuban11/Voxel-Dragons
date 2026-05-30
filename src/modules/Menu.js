@@ -115,7 +115,9 @@ function injectStyles() {
 const CHARACTER_NOTES = {
   duck: 'Armas + puede construir bloques',
   knight: 'Espada y guardia que repele',
-  hunter: 'Espada y guardia que repele',
+  hunter: 'Dagas, bombas y vista aérea',
+  samurai: 'Katana con parry y dash potenciado',
+  mage: 'Frágil pero con 5 hechizos de maná',
 };
 
 export class Menu {

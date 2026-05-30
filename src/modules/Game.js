@@ -12,6 +12,7 @@ import { Inventory } from './Inventory.js';
 import { CHARACTERS } from './Characters.js';
 import { buildViewmodel, disposeViewmodel } from './Viewmodels.js';
 import { Shop } from './Shop.js';
+import { MageController } from './MageController.js';
 import { BALANCE } from './GameBalance.js';
 
 export class Game {
@@ -143,11 +144,20 @@ export class Game {
     // Samurai parry-buff + dash state.
     this.samuraiBuffActive = false;
     this.samuraiBuffTimer = 0;
-    this.parryInvulnTimer = 0;
+    this.parryWindowTimer = 0; // open window in which an attack triggers the buff
     this.samuraiDashCharging = false;
     this.samuraiDashCharge = 0;
     this.samuraiAwaitRelease = false;
     this.altPrevHeld = false;
+
+    // Mage spells.
+    this.mage = this.character.loadout === 'spells'
+      ? new MageController({
+          scene: this.scene, effects: this.effects, world: this.world,
+          zombies: this.zombies, dragons: this.dragons, player: this.player,
+          camera: this.camera, audio: this.audio, hud: this.hud,
+        })
+      : null;
     this.shop = null;
     this.shopDone = false;
     this.victory = false;
@@ -346,6 +356,7 @@ export class Game {
     this.player.update(delta, this.input, this.world);
     this.clampPlayerToBounds();
     this.world.update(delta);
+    if (this.mage) this.mage.update(delta); // before enemies so the tornado can lift them
     this.dragons.update(delta, this.player, this.scene);
     this.zombies.update(delta, this.player, this.world);
     this.handleZombieEvents();
@@ -414,6 +425,7 @@ export class Game {
       maxHealth: this.player.maxHealth,
       shield: this.player.shield,
       maxShield: this.player.maxShield,
+      shieldLabel: this.character.manaName ? 'Maná' : 'Escudo',
       ammo: ammoState,
       // Only the duck's guns show ammo (clip / reserve). Sword and dagger hide it.
       ammoText: isGun ? (infiniteAmmo ? '∞' : `${ammoState.ammo} / ${ammoState.reserveAmmo}`) : '',
@@ -596,10 +608,11 @@ export class Game {
   }
 
   updateSamuraiState(delta) {
-    if (this.parryInvulnTimer > 0) {
-      this.parryInvulnTimer -= delta;
-      if (this.parryInvulnTimer <= 0) {
-        this.parryInvulnTimer = 0;
+    // Open parry window: invulnerable until it closes; a hit during it triggers the buff.
+    if (this.parryWindowTimer > 0) {
+      this.parryWindowTimer -= delta;
+      if (this.parryWindowTimer <= 0) {
+        this.parryWindowTimer = 0;
         this.player.invulnerable = false;
       }
     }
@@ -620,14 +633,21 @@ export class Game {
 
     if (!this.samuraiBuffActive) {
       if (altPressed) {
-        this.samuraiParry();
-        this.samuraiAwaitRelease = true; // don't immediately start charging a dash
+        this.samuraiParry(); // opens the window; the buff only triggers if hit
+        this.samuraiAwaitRelease = true;
       }
     } else if (this.samuraiAwaitRelease) {
       if (altReleased) this.samuraiAwaitRelease = false;
     } else if (altHeld) {
       this.samuraiDashCharging = true;
       this.samuraiDashCharge = Math.min(this.samuraiDashCharge + delta, BALANCE.katana.dashMaxCharge);
+      // At max charge it fires whether or not the button is still held.
+      if (this.samuraiDashCharge >= BALANCE.katana.dashMaxCharge) {
+        this.samuraiDash(this.samuraiDashCharge);
+        this.samuraiDashCharging = false;
+        this.samuraiDashCharge = 0;
+        this.samuraiAwaitRelease = true;
+      }
     } else if (this.samuraiDashCharging) {
       this.samuraiDash(this.samuraiDashCharge);
       this.samuraiDashCharging = false;
@@ -637,19 +657,28 @@ export class Game {
     this.altPrevHeld = altHeld;
   }
 
+  // Opens the parry window. No buff yet — an enemy must connect within it.
   samuraiParry() {
+    if (this.samuraiBuffActive) return;
+    this.parryWindowTimer = BALANCE.katana.parryWindow;
+    this.player.invulnerable = true;
+    this.effects.impact(this.player.object.position, 0x9fd0ff);
+    this.audio.reload();
+  }
+
+  // Called when an attack lands during the parry window.
+  samuraiParrySuccess() {
+    if (this.samuraiBuffActive) return;
     this.samuraiBuffActive = true;
     this.samuraiBuffTimer = BALANCE.katana.buffDuration;
-    this.parryInvulnTimer = BALANCE.katana.parryInvuln;
-    this.player.invulnerable = true;
 
     const center = this.player.object.position;
     this.zombies.knockback(center, BALANCE.katana.parryRadius, BALANCE.katana.parryKnockback, this.world);
     this.dragons.knockback(center, BALANCE.katana.parryRadius, BALANCE.katana.parryKnockback);
 
     this.effects.shockwave(center.clone(), BALANCE.katana.parryRadius, 0x9fd0ff);
-    this.audio.reload();
-    this.hud.showMessage('¡Postura! Ataques potenciados 10s', 1500);
+    this.audio.explosion();
+    this.hud.showMessage('¡Parry! Ataques potenciados 10s', 1500);
     this.updateViewmodel(); // unsheathe the katana
   }
 
@@ -671,7 +700,7 @@ export class Game {
     this.zombies.hitBox(origin, forward, right, length, halfWidth, damage);
     this.dragons.hitBox(origin, forward, right, length, halfWidth, damage);
 
-    const slashes = Math.round(length * 2.4);
+    const slashes = Math.round(length * 4);
     for (let i = 0; i < slashes; i += 1) {
       const along = (i / slashes) * length + (Math.random() - 0.5);
       const side = (Math.random() - 0.5) * 2 * halfWidth;
@@ -765,6 +794,11 @@ export class Game {
   handleZombieEvents() {
     for (const event of this.zombies.consumeEvents()) {
       if (event.type === 'attack') {
+        // A hit during the samurai parry window triggers the buff (no damage).
+        if (this.parryWindowTimer > 0 && !this.samuraiBuffActive) {
+          this.samuraiParrySuccess();
+          continue;
+        }
         if (this.player.invulnerable) continue;
         this.player.damage(event.damage);
         this.hud.flashDamage();
@@ -845,6 +879,8 @@ export class Game {
       }
     } else if (slot.abilityId === 'aerial') {
       this.activateAerial();
+    } else if (this.mage && BALANCE.mage.skills[slot.abilityId]) {
+      this.mage.tryCast(slot.abilityId);
     }
   }
 
@@ -1008,7 +1044,7 @@ export class Game {
     this.player.setPosition(...this.world.getSpawnPoint().toArray());
     this.samuraiBuffActive = false;
     this.samuraiBuffTimer = 0;
-    this.parryInvulnTimer = 0;
+    this.parryWindowTimer = 0;
     this.samuraiDashCharging = false;
     this.samuraiDashCharge = 0;
     this.updateViewmodel();
@@ -1020,7 +1056,12 @@ export class Game {
     for (const ball of this.dragons.consumeImpacts()) {
       this.effects.explosion(ball.position);
       this.audio.explosion();
-      if (ball.hitPlayer && ball.damage > 0 && !this.player.invulnerable) {
+      if (ball.hitPlayer && ball.damage > 0) {
+        if (this.parryWindowTimer > 0 && !this.samuraiBuffActive) {
+          this.samuraiParrySuccess();
+          continue;
+        }
+        if (this.player.invulnerable) continue;
         this.player.damage(ball.damage);
         this.hud.flashDamage();
         this.audio.damage();
@@ -1069,6 +1110,7 @@ export class Game {
     this.hud.destroy?.();
     this.shop?.hide?.();
     this.removeAerialCircle();
+    this.mage?.dispose?.();
     for (const bomb of this.bombs) this.scene.remove(bomb.mesh);
     this.bombs.length = 0;
     this.dragons.dispose?.();

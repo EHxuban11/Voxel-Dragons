@@ -104,6 +104,7 @@ export class Player {
     this.maxShield = this.config.maxShield;
     this.shield = this.config.maxShield;
     this.shieldRegenPercent = this.config.shieldRegenPercent;
+    this.shieldRegenLocked = false; // disabled briefly after the mage nuke
     this.ammo = this.config.ammo;
     this.maxAmmo = this.config.maxAmmo;
 
@@ -211,7 +212,7 @@ export class Player {
   update(delta, input = {}, world = null) {
     if (!Number.isFinite(delta) || delta <= 0 || !this.isAlive) return;
 
-    if (this.maxShield > 0 && this.shield < this.maxShield) {
+    if (this.maxShield > 0 && this.shield < this.maxShield && !this.shieldRegenLocked) {
       this.shield = Math.min(
         this.maxShield,
         this.shield + this.maxShield * (this.shieldRegenPercent / 100) * delta,

@@ -275,7 +275,13 @@ export class DragonManager {
   }
 
   updateDragon(dragon, delta, playerPosition) {
-    dragon.angle += dragon.speed * delta;
+    let speedFactor = 1;
+    if (dragon.slowTimer > 0) {
+      dragon.slowTimer -= delta;
+      speedFactor = dragon.slowFactor ?? 1;
+      if (dragon.slowTimer <= 0) this._clearSlowTint(dragon);
+    }
+    dragon.angle += dragon.speed * speedFactor * delta;
     const orbitCenter = playerPosition.lengthSq() > 0.001 ? playerPosition : this.origin;
 
     // Radius breathes in and out so the dragon circles the player, sometimes
@@ -589,6 +595,39 @@ export class DragonManager {
       dragon.mesh.position.x = THREE.MathUtils.clamp(dragon.mesh.position.x + dx * inv * force, this.bounds.minX, this.bounds.maxX);
       dragon.mesh.position.z = THREE.MathUtils.clamp(dragon.mesh.position.z + dz * inv * force, this.bounds.minZ, this.bounds.maxZ);
     }
+  }
+
+  slow(center, radius, factor, duration) {
+    for (const dragon of this.dragons) {
+      if (dragon.dead) continue;
+      const dx = dragon.mesh.position.x - center.x;
+      const dz = dragon.mesh.position.z - center.z;
+      if (Math.hypot(dx, dz) > radius) continue;
+      dragon.slowTimer = duration;
+      dragon.slowFactor = factor;
+      this._applySlowTint(dragon);
+    }
+  }
+
+  _applySlowTint(dragon) {
+    dragon.mesh.traverse((child) => {
+      if (!child.isMesh) return;
+      if (!child.userData.baseMat) child.userData.baseMat = child.material;
+      if (!child.userData.iceMat) {
+        child.userData.iceMat = child.userData.baseMat.clone();
+        child.userData.iceMat.color = child.userData.baseMat.color.clone().lerp(new THREE.Color(0x8fd3ff), 0.7);
+        child.userData.iceMat.emissive = new THREE.Color(0x2a6bdf);
+        child.userData.iceMat.emissiveIntensity = 0.6;
+      }
+      child.material = child.userData.iceMat;
+    });
+  }
+
+  _clearSlowTint(dragon) {
+    dragon.slowTimer = 0;
+    dragon.mesh.traverse((child) => {
+      if (child.isMesh && child.userData.baseMat) child.material = child.userData.baseMat;
+    });
   }
 
   killDragon(dragon) {

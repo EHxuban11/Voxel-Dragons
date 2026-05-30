@@ -254,6 +254,21 @@ export class ZombieManager {
 
     for (const zombie of this.zombies) {
       if (zombie.dead) continue;
+
+      // Slow (mage blizzard): reduce speed and keep the frozen tint.
+      let speedFactor = 1;
+      if (zombie.slowTimer > 0) {
+        zombie.slowTimer -= dt;
+        speedFactor = zombie.slowFactor ?? 1;
+        if (zombie.slowTimer <= 0) this._clearSlowTint(zombie);
+      }
+
+      // Lifted by the fire tornado: the tornado controls the position this frame.
+      if (zombie.liftTimer > 0) {
+        zombie.liftTimer -= dt;
+        continue;
+      }
+
       if (zombie.static) continue; // training dummies never move or attack
 
       this.tmpDir.set(playerPos.x - zombie.mesh.position.x, 0, playerPos.z - zombie.mesh.position.z);
@@ -266,12 +281,12 @@ export class ZombieManager {
 
       if (distance > this.attackRange) {
         const nextX = THREE.MathUtils.clamp(
-          zombie.mesh.position.x + this.tmpDir.x * zombie.speed * dt,
+          zombie.mesh.position.x + this.tmpDir.x * zombie.speed * speedFactor * dt,
           this.bounds.minX,
           this.bounds.maxX,
         );
         const nextZ = THREE.MathUtils.clamp(
-          zombie.mesh.position.z + this.tmpDir.z * zombie.speed * dt,
+          zombie.mesh.position.z + this.tmpDir.z * zombie.speed * speedFactor * dt,
           this.bounds.minZ,
           this.bounds.maxZ,
         );
@@ -395,6 +410,61 @@ export class ZombieManager {
       results.push({ dragon: null, zombie, point: intersection.point.clone(), distance: intersection.distance, killed, health: zombie.health });
     }
     return results;
+  }
+
+  // --- status effects (mage) -----------------------------------------------
+  slow(center, radius, factor, duration) {
+    for (const zombie of this.zombies) {
+      if (zombie.dead) continue;
+      const dx = zombie.mesh.position.x - center.x;
+      const dz = zombie.mesh.position.z - center.z;
+      if (Math.hypot(dx, dz) > radius) continue;
+      zombie.slowTimer = duration;
+      zombie.slowFactor = factor;
+      this._applySlowTint(zombie);
+    }
+  }
+
+  _applySlowTint(zombie) {
+    zombie.mesh.traverse((child) => {
+      if (!child.isMesh) return;
+      if (!child.userData.baseMat) child.userData.baseMat = child.material;
+      if (!child.userData.iceMat) {
+        child.userData.iceMat = child.userData.baseMat.clone();
+        child.userData.iceMat.color = child.userData.baseMat.color.clone().lerp(new THREE.Color(0x8fd3ff), 0.7);
+        child.userData.iceMat.emissive = new THREE.Color(0x2a6bdf);
+        child.userData.iceMat.emissiveIntensity = 0.6;
+      }
+      child.material = child.userData.iceMat;
+    });
+  }
+
+  _clearSlowTint(zombie) {
+    zombie.slowTimer = 0;
+    zombie.mesh.traverse((child) => {
+      if (child.isMesh && child.userData.baseMat) child.material = child.userData.baseMat;
+    });
+  }
+
+  // Fire tornado: pull zombies in, lift and spin them while damaging over time.
+  tornadoPull(center, radius, elapsed) {
+    const lifted = [];
+    for (const zombie of this.zombies) {
+      if (zombie.dead || zombie.static) continue;
+      const dx = center.x - zombie.mesh.position.x;
+      const dz = center.z - zombie.mesh.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > radius) continue;
+      zombie.liftTimer = 0.2; // keep it controlled by the tornado
+      const angle = elapsed * 6 + zombie.id;
+      const orbit = Math.min(dist, radius * 0.5);
+      zombie.mesh.position.x = center.x + Math.cos(angle) * orbit;
+      zombie.mesh.position.z = center.z + Math.sin(angle) * orbit;
+      zombie.mesh.position.y = center.y + 1.5 + (Math.sin(elapsed * 3 + zombie.id) * 0.5 + 1) * 2.5;
+      zombie.mesh.rotation.y = angle;
+      lifted.push(zombie);
+    }
+    return lifted;
   }
 
   // --- melee hit support (sword) -------------------------------------------

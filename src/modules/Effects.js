@@ -173,7 +173,7 @@ export class Effects {
     const roll = Math.random() * Math.PI * 2;
     const rollQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), roll);
     const camQuat = new THREE.Quaternion();
-    const ttl = 0.4;
+    const ttl = 0.6;
     const effect = {
       object: mesh,
       age: 0,

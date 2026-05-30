@@ -543,7 +543,7 @@ export class HUD {
       </div>
       <div class="vd-inventory" data-hud="inventoryPanel"></div>
       <div class="vd-bottom-left">
-        <div class="vd-shield-label">Escudo <span data-hud="shield">100 / 100</span></div>
+        <div class="vd-shield-label"><span data-hud="shieldName">Escudo</span> <span data-hud="shield">100 / 100</span></div>
         <div class="vd-shield-shell"><div class="vd-shield-fill" data-hud="shieldFill"></div></div>
         <div class="vd-health-label">Vida <span data-hud="health">100 / 100</span></div>
         <div class="vd-health-shell"><div class="vd-health-fill" data-hud="healthFill"></div></div>
@@ -558,6 +558,7 @@ export class HUD {
     this.nodes = {
       vignette: this.root.querySelector('.vd-vignette'),
       guard: this.root.querySelector('[data-hud="guard"]'),
+      shieldName: this.root.querySelector('[data-hud="shieldName"]'),
       shield: this.root.querySelector('[data-hud="shield"]'),
       shieldFill: this.root.querySelector('[data-hud="shieldFill"]'),
       health: this.root.querySelector('[data-hud="health"]'),
@@ -603,6 +604,7 @@ export class HUD {
     const weapon = getWeaponName(nextState);
     const dragons = getDragonCount(nextState);
 
+    if (typeof nextState.shieldLabel === 'string') this.nodes.shieldName.textContent = nextState.shieldLabel;
     this.nodes.shield.textContent = `${Math.round(shield)} / ${Math.round(maxShield)}`;
     this.nodes.shieldFill.style.transform = `scaleX(${maxShield > 0 ? shield / maxShield : 0})`;
     this.nodes.health.textContent = `${Math.round(health)} / ${Math.round(maxHealth)}`;

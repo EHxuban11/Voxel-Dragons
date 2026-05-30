@@ -48,6 +48,18 @@ export const CHARACTERS = [
     shield: 40,
     speedMult: 0.9,
   },
+  {
+    id: 'mage',
+    name: 'Mago',
+    emoji: '🧙',
+    loadout: 'spells', // five elemental skills that cost mana (the shield)
+    canPlaceBlocks: false,
+    ability: 'none',
+    health: 25,
+    shield: 225, // shown as "Maná"
+    speedMult: 0.8,
+    manaName: true,
+  },
 ];
 
 export function getCharacter(id) {

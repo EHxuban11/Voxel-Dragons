@@ -27,6 +27,15 @@ function buildSlots(character) {
       { kind: 'ability', abilityId: 'aerial', label: 'ataque to guapo', count: null, color: '#66ccff' },
     ];
   }
+  if (character?.loadout === 'spells') {
+    return [
+      { kind: 'ability', abilityId: 'fireball', label: 'Bola de fuego', count: null, color: '#ff6b1a' },
+      { kind: 'ability', abilityId: 'thunder', label: 'Rayo', count: null, color: '#ffe066' },
+      { kind: 'ability', abilityId: 'tornado', label: 'Tornado de fuego', count: null, color: '#ff9f1c' },
+      { kind: 'ability', abilityId: 'blizzard', label: 'Ventisca eterna', count: null, color: '#aee3ff' },
+      { kind: 'ability', abilityId: 'nuke', label: 'Nuke', count: null, color: '#ff3030' },
+    ];
+  }
   // Default (duck): guns plus buildable blocks.
   const slots = GUN_SLOTS.map((slot) => ({ ...slot }));
   if (character?.canPlaceBlocks !== false) {

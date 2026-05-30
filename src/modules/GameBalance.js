@@ -205,9 +205,9 @@ export const BALANCE = deepFreeze({
     buffDamageMult: 2, // basic attacks hit much harder while buffed
     buffCooldown: 0.35, // and much faster
     buffDuration: 10,
+    parryWindow: 0.5, // you must be attacked within this window to trigger the buff
     parryRadius: 5.5,
     parryKnockback: 4,
-    parryInvuln: 0.6,
     dashMaxCharge: 3.0,
     dashSpeed: 42,
     dashMinLength: 5,
@@ -245,6 +245,19 @@ export const BALANCE = deepFreeze({
     distance: 8, // blocks travelled
     speed: 38, // blocks per second
     cooldown: 5, // seconds between dashes
+  },
+
+  mage: {
+    health: 25,
+    mana: 225, // stored as the shield
+    nukeRegenLock: 10, // seconds mana can't regen after a nuke
+    skills: {
+      fireball: { cost: 5, cd: 0, speed: 16, radius: 2.6, damage: 34, life: 4 },
+      thunder: { cost: 40, cd: 10, delay: 1.5, radius: 2, damage: 130 },
+      tornado: { cost: 70, cd: 10, ahead: 5, radius: 4, duration: 4, tickRate: 0.5, tickDamage: 3 }, // total 24 < 30 zombie hp
+      blizzard: { cost: 60, cd: 10, speed: 9, radius: 5, damage: 24, slowFactor: 0.5, slowDuration: 5, life: 5 },
+      nuke: { cost: 225, cd: 10, radius: 38, damage: 9999 },
+    },
   },
 
   progression: {
