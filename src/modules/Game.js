@@ -5,6 +5,7 @@ import { Weapons } from './Weapons.js';
 import { DragonManager } from './DragonManager.js';
 import { ZombieManager } from './ZombieManager.js';
 import { SkeletonManager } from './SkeletonManager.js';
+import { WitchManager } from './WitchManager.js';
 import { Input } from './Input.js';
 import { HUD } from './HUD.js';
 import { Effects } from './Effects.js';
@@ -99,17 +100,19 @@ export class Game {
       spawnRadiusMax: BALANCE.zombies.spawnRadiusMax,
     });
     this.skeletons = new SkeletonManager(this.scene, { bounds, world: this.world, ...BALANCE.skeletons });
+    this.witches = new WitchManager(this.scene, { bounds, world: this.world, ...BALANCE.witches });
 
     // Aggregator that fans hits/effects out to every enemy manager.
-    const managers = [this.dragons, this.zombies, this.skeletons];
-    const lists = () => [this.dragons.dragons, this.zombies.zombies, this.skeletons.skeletons];
+    const managers = [this.dragons, this.zombies, this.skeletons, this.witches];
+    const lists = () => [this.dragons.dragons, this.zombies.zombies, this.skeletons.skeletons, this.witches.witches];
     this.enemies = {
       managers,
       hitMelee: (o, d, r, dmg, arc) => managers.flatMap((m) => m.hitMelee(o, d, r, dmg, arc)),
       hitBox: (o, f, ri, l, hw, dmg) => managers.flatMap((m) => m.hitBox(o, f, ri, l, hw, dmg)),
       knockback: (c, r, f) => managers.forEach((m) => m.knockback(c, r, f, this.world)),
       slow: (c, r, fac, dur) => managers.forEach((m) => m.slow(c, r, fac, dur)),
-      tornadoPull: (c, r, e) => { this.zombies.tornadoPull(c, r, e); this.skeletons.tornadoPull(c, r, e); },
+      tornadoPull: (c, r, e) => { this.zombies.tornadoPull(c, r, e); this.skeletons.tornadoPull(c, r, e); this.witches.tornadoPull(c, r, e); },
+      heal: (c, r, amount) => managers.forEach((m) => m.heal(c, r, amount)),
       hitAllByRay: (ray, dmg) => managers.flatMap((m) => m.hitAllByRay(ray, dmg)),
       hitByRay: (ray, dmg) => {
         let best = null;
@@ -124,6 +127,9 @@ export class Game {
       aliveCount: () => managers.reduce((sum, m) => sum + m.getAliveCount(), 0),
     };
     this.enemyTargets = this.enemies; // weapons use hitByRay/hitAllByRay
+
+    // Witches lob healing potions at the nearest wounded monster.
+    this.witches.healTargetProvider = (pos) => this.findHealTarget(pos);
 
     this.hud = new HUD(this.root);
     this.started = false;
@@ -232,10 +238,11 @@ export class Game {
       this.openShop();
     }
 
-    // Lots of zombies (increasing), fewer skeletons, fewest dragons.
+    // Lots of zombies (increasing), fewer skeletons, fewer witches, fewest dragons.
     const w = this.wave;
     this.zombies.spawnWave(2 + w, this.player, this.world);
     this.skeletons.spawnWave(Math.ceil(w * 0.6), this.player, this.world);
+    this.witches.spawnWave(Math.floor(w * 0.35), this.player, this.world);
     this.dragons.spawnWave(Math.max(1, Math.ceil(w * 0.3)));
     this.hud.showMessage(`Oleada ${this.wave}`, 1500);
   }
@@ -270,7 +277,12 @@ export class Game {
   }
 
   tick() {
-    const delta = Math.min(this.clock.getDelta(), 0.05);
+    const rawDelta = this.clock.getDelta();
+    const delta = Math.min(rawDelta, 0.05);
+    if (rawDelta > 0) {
+      const instant = 1 / rawDelta;
+      this.fps = this.fps ? this.fps + (instant - this.fps) * 0.1 : instant; // smoothed
+    }
 
     // Death screen: everything is frozen; return to the menu after 3 seconds.
     if (this.state === 'dead') {
@@ -308,8 +320,10 @@ export class Game {
       this.dragons.update(delta, this.player, this.scene);
       this.zombies.update(delta, this.player, this.world);
       this.skeletons.update(delta, this.player, this.world);
+      this.witches.update(delta, this.player, this.world);
       this.handleZombieEvents();
       this.handleSkeletonArrows();
+      this.handleWitchPotions();
       this.handleDragonFireballs(delta);
       this.updateBombs(delta);
       this.weapons.update(delta);
@@ -366,6 +380,7 @@ export class Game {
         this.dragons.clearDragons();
         this.zombies.clearZombies();
         this.skeletons.clearSkeletons();
+        this.witches.clearWitches();
       }
     }
 
@@ -376,13 +391,16 @@ export class Game {
     this.dragons.update(delta, this.player, this.scene);
     this.zombies.update(delta, this.player, this.world);
     this.skeletons.update(delta, this.player, this.world);
+    this.witches.update(delta, this.player, this.world);
     this.handleZombieEvents();
     this.handleSkeletonArrows();
+    this.handleWitchPotions();
 
     // Coins are earned by killing enemies.
     this.coins += this.dragons.consumeKills() * BALANCE.coins.dragon
       + this.zombies.consumeKills() * BALANCE.coins.zombie
-      + this.skeletons.consumeKills() * BALANCE.coins.skeleton;
+      + this.skeletons.consumeKills() * BALANCE.coins.skeleton
+      + this.witches.consumeKills() * BALANCE.coins.witch;
 
     if (!this.victory && this.enemies.aliveCount() === 0) {
       this.advanceWave();
@@ -457,11 +475,13 @@ export class Game {
       dragonsTotal: this.dragons.dragons.length,
       zombies: this.zombies.getAliveCount(),
       skeletons: this.skeletons.getAliveCount(),
+      witches: this.witches.getAliveCount(),
       coins: this.coins,
       revive: this.hasRevive,
       guard: this.player.guardActive,
       wave: this.wave,
       waveCount: BALANCE.progression.waveCount,
+      fps: this.fps,
       inventory: this.inventory.snapshot(),
       locked: this.input.pointerLocked
     });
@@ -489,6 +509,7 @@ export class Game {
   enterTrainingGround() {
     this.dragons.clearDragons();
     this.skeletons.clearSkeletons();
+    this.witches.clearWitches();
 
     // Flat arena, then place the player and the practice targets.
     this.world.generateFlat(5);
@@ -1119,6 +1140,29 @@ export class Game {
     }
   }
 
+  // Nearest wounded monster for a witch to throw a healing potion at.
+  findHealTarget(pos) {
+    let best = null;
+    let bestDist = this.witches.throwRange;
+    for (const list of [this.zombies.zombies, this.skeletons.skeletons, this.witches.witches, this.dragons.dragons]) {
+      for (const e of list) {
+        if (e.dead || e.dummy || e.health >= e.maxHealth) continue;
+        const d = pos.distanceTo(e.mesh.position);
+        if (d < bestDist) { bestDist = d; best = e.mesh.position; }
+      }
+    }
+    return best ? best.clone() : null;
+  }
+
+  handleWitchPotions() {
+    for (const event of this.witches.consumeEvents()) {
+      if (event.type !== 'heal') continue;
+      this.enemies.heal(event.position, event.radius, event.amount);
+      this.effects.shockwave(event.position.clone(), event.radius, 0x66ff9c);
+      this.effects.impact(event.position, 0x9cffc0);
+    }
+  }
+
   getLookDirection() {
     return this.camera.getWorldDirection(new THREE.Vector3());
   }
@@ -1166,6 +1210,7 @@ export class Game {
     this.dragons.dispose?.();
     this.zombies.dispose?.();
     this.skeletons.dispose?.();
+    this.witches.dispose?.();
     this.world.dispose?.();
     if (this.viewmodel) {
       this.camera.remove(this.viewmodel);

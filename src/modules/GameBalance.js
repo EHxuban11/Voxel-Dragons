@@ -284,9 +284,22 @@ export const BALANCE = deepFreeze({
     reflectDamage: 30, // a guard-reflected arrow one-shots its shooter
   },
 
+  witches: {
+    health: 26,
+    speed: 3.0,
+    keepMin: 12, // keeps a bit more distance than the skeleton (9)
+    keepMax: 19,
+    throwRange: 22,
+    throwCooldown: 2.4,
+    potionSpeed: 14,
+    healRadius: 4,
+    healAmount: 14,
+  },
+
   coins: {
     zombie: 2,
     skeleton: 3,
+    witch: 4,
     dragon: 5,
   },
 

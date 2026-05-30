@@ -512,6 +512,14 @@ export class ZombieManager {
     }
   }
 
+  heal(center, radius, amount) {
+    for (const zombie of this.zombies) {
+      if (zombie.dead || zombie.dummy) continue;
+      if (zombie.mesh.position.distanceTo(center) > radius) continue;
+      zombie.health = Math.min(zombie.maxHealth, zombie.health + amount);
+    }
+  }
+
   killZombie(zombie) {
     zombie.dead = true;
     zombie.mesh.visible = false;

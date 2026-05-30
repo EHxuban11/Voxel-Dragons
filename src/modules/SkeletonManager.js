@@ -445,6 +445,14 @@ export class SkeletonManager {
     }
   }
 
+  heal(center, radius, amount) {
+    for (const skeleton of this.skeletons) {
+      if (skeleton.dead) continue;
+      if (skeleton.mesh.position.distanceTo(center) > radius) continue;
+      skeleton.health = Math.min(skeleton.maxHealth, skeleton.health + amount);
+    }
+  }
+
   killSkeleton(skeleton) {
     skeleton.dead = true;
     skeleton.mesh.visible = false;

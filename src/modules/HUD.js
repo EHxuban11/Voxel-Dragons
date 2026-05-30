@@ -12,8 +12,10 @@ const DEFAULT_STATE = {
   dragonsTotal: null,
   zombies: 0,
   skeletons: 0,
+  witches: 0,
   wave: 1,
   waveCount: 10,
+  fps: 0,
   coins: 0,
   revive: true,
   guard: false,
@@ -100,12 +102,22 @@ function injectStyles() {
 
     .vd-top-right {
       right: 18px;
-      top: 18px;
+      top: 42px;
       padding: 8px 10px;
       background: rgba(10, 14, 18, 0.48);
       border: 1px solid rgba(255, 255, 255, 0.16);
       border-radius: 6px;
       backdrop-filter: blur(4px);
+    }
+
+    .vd-fps {
+      position: absolute;
+      right: 18px;
+      top: 16px;
+      font-size: 14px;
+      font-weight: 800;
+      color: #8be36a;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     }
 
     .vd-topline {
@@ -542,10 +554,11 @@ export class HUD {
       <div class="vd-crosshair"></div>
       <div class="vd-guard" data-hud="guard">🛡️</div>
       <div class="vd-help">WASD mover | Espacio saltar | E o clic izq atacar | F o clic der habilidad | I inventario</div>
+      <div class="vd-fps" data-hud="fps">0 FPS</div>
       <div class="vd-wavebar" data-hud="wavebar"></div>
       <div class="vd-top-right">
         <div class="vd-topline"><span class="vd-heart" data-hud="heart">❤️</span><span class="vd-coins">🪙 <span data-hud="coins">0</span></span></div>
-        Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span><br>Esqueletos: <span data-hud="skeletons">0</span>
+        Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span><br>Esqueletos: <span data-hud="skeletons">0</span><br>Brujas: <span data-hud="witches">0</span>
       </div>
       <div class="vd-message" data-hud="message"></div>
       <div class="vd-deathscreen" data-hud="deathscreen">
@@ -579,6 +592,8 @@ export class HUD {
       dragons: this.root.querySelector('[data-hud="dragons"]'),
       zombies: this.root.querySelector('[data-hud="zombies"]'),
       skeletons: this.root.querySelector('[data-hud="skeletons"]'),
+      witches: this.root.querySelector('[data-hud="witches"]'),
+      fps: this.root.querySelector('[data-hud="fps"]'),
       coins: this.root.querySelector('[data-hud="coins"]'),
       heart: this.root.querySelector('[data-hud="heart"]'),
       wavebar: this.root.querySelector('[data-hud="wavebar"]'),
@@ -629,6 +644,8 @@ export class HUD {
     this.nodes.dragons.textContent = dragons.total === null ? String(dragons.value) : `${dragons.value} / ${dragons.total}`;
     this.nodes.zombies.textContent = String(firstNumber(nextState, ['zombies'], DEFAULT_STATE.zombies));
     this.nodes.skeletons.textContent = String(firstNumber(nextState, ['skeletons'], DEFAULT_STATE.skeletons));
+    this.nodes.witches.textContent = String(firstNumber(nextState, ['witches'], DEFAULT_STATE.witches));
+    this.nodes.fps.textContent = `${Math.round(firstNumber(nextState, ['fps'], DEFAULT_STATE.fps))} FPS`;
     this.nodes.coins.textContent = String(firstNumber(nextState, ['coins'], DEFAULT_STATE.coins));
     this.nodes.heart.classList.toggle('is-used', !nextState.revive);
     this.nodes.guard.classList.toggle('is-active', Boolean(nextState.guard));

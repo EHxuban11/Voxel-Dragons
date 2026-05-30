@@ -722,6 +722,14 @@ export class DragonManager {
     });
   }
 
+  heal(center, radius, amount) {
+    for (const dragon of this.dragons) {
+      if (dragon.dead) continue;
+      if (dragon.mesh.position.distanceTo(center) > radius) continue;
+      dragon.health = Math.min(dragon.maxHealth, dragon.health + amount);
+    }
+  }
+
   killDragon(dragon) {
     dragon.dead = true;
     dragon.mesh.visible = false;

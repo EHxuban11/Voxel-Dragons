@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createBlockMaterials } from './BlockTextures.js';
 
 const BLOCK_SIZE = 1;
 const DEFAULT_OPTIONS = {
@@ -112,20 +113,8 @@ export class World extends THREE.Group {
     // single seamless sheet instead of showing per-cube edges.
     this.waterGeometry = new THREE.PlaneGeometry(BLOCK_SIZE, BLOCK_SIZE);
     this.waterGeometry.rotateX(-Math.PI / 2);
-    this.materials = new Map(
-      Object.entries(BLOCK_TYPES).map(([type, config]) => [
-        type,
-        new THREE.MeshStandardMaterial({
-          color: config.color,
-          roughness: config.roughness,
-          metalness: config.metalness,
-          transparent: Boolean(config.transparent),
-          opacity: config.opacity ?? 1,
-          depthWrite: !config.transparent,
-          side: config.transparent ? THREE.DoubleSide : THREE.FrontSide,
-        }),
-      ]),
-    );
+    // Minecraft-style procedural pixel textures (grass uses a 6-face array).
+    this.materials = createBlockMaterials(BLOCK_TYPES);
 
     this.generate();
   }
@@ -562,7 +551,8 @@ export class World extends THREE.Group {
     this.geometry.dispose();
     this.waterGeometry.dispose();
     for (const material of this.materials.values()) {
-      material.dispose();
+      if (Array.isArray(material)) material.forEach((m) => m.dispose());
+      else material.dispose();
     }
     this.materials.clear();
     this.blocks.clear();
