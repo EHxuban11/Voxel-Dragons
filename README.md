@@ -23,6 +23,27 @@ Comandos disponibles:
 - `npm run dev`: inicia el servidor de desarrollo.
 - `npm run build`: genera una build de produccion.
 - `npm run preview`: sirve la build generada para revisarla localmente.
+- `npm test`: ejecuta la suite de tests (`node --test`, sin dependencias nativas).
+- `npm run bench`: benchmarks headless de las rutas de computo (importador, mapas, NBT/Anvil).
+- `npm run build:wasm`: recompila el modulo WASM del desempaquetador (requiere AssemblyScript, ya incluido como devDependency).
+
+> Requiere Node >= 20.19 (o 22.12). Hay un `.nvmrc`; usa `nvm use`.
+
+## Rendimiento (profiling y benchmarks)
+
+Dos herramientas, pensadas para reusarse:
+
+- **Benchmarks headless** (`npm run bench`): mide el coste de CPU de los modulos
+  de computo (desempaquetado Anvil, parseo NBT, importador de mundos, generadores
+  de mapa). Imprime mediana/media/min por ruta. Util para optimizaciones de carga.
+- **Profiler en navegador** (`src/dev/Profiler.js`): mide el coste **por frame** de
+  cada fase del bucle (`player`, `world`, `dragons`, `zombies`, ..., `hud`, `render`)
+  con un overlay en vivo (FPS, ms medio, p95, % del frame; la fase mas cara se
+  resalta en rojo). Esta **apagado por defecto**; para activarlo:
+  - abre el juego con `?profile` en la URL, o
+  - pulsa **F3** dentro del juego (se recuerda entre recargas), o
+  - desde consola: `voxelProfiler.toggle()` / `voxelProfiler.report()` (vuelca una
+    tabla con `console.table`).
 
 ## Controles
 

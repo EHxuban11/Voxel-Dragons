@@ -7,6 +7,7 @@ import { ZombieManager } from './enemies/ZombieManager.js';
 import { SkeletonManager } from './enemies/SkeletonManager.js';
 import { WitchManager } from './enemies/WitchManager.js';
 import { createEnemyAggregator } from './enemies/EnemyAggregator.js';
+import { Profiler, profilerEnabledByDefault } from '../dev/Profiler.js';
 import { HUD } from '../ui/HUD.js';
 import { Effects } from '../engine/Effects.js';
 import { Inventory } from './Inventory.js';
@@ -128,6 +129,8 @@ export class Game {
     this.witches.healTargetProvider = (pos) => this.findHealTarget(pos);
 
     this.hud = new HUD(this.root);
+    // Per-frame profiler (off unless ?profile / F3 / persisted). See dev/Profiler.
+    this.profiler = new Profiler({ enabled: profilerEnabledByDefault() });
     this.started = false;
     this.state = 'playing'; // 'playing' | 'shop' | 'dead'
     this.wave = 0;
@@ -280,6 +283,8 @@ export class Game {
   }
 
   tick() {
+    const p = this.profiler;
+    p.beginFrame();
     const rawDelta = this.clock.getDelta();
     const delta = Math.min(rawDelta, 0.05);
     if (rawDelta > 0) {
@@ -387,14 +392,28 @@ export class Game {
       }
     }
 
+    p.begin('player');
     this.player.update(delta, this.input, this.world);
     this.clampPlayerToBounds();
+    p.end();
+    p.begin('world');
     this.world.update(delta);
-    if (this.mage) this.mage.update(delta); // before enemies so the tornado can lift them
+    p.end();
+    if (this.mage) { p.begin('mage'); this.mage.update(delta); p.end(); } // before enemies so the tornado can lift them
+    p.begin('dragons');
     this.dragons.update(delta, this.player, this.scene);
+    p.end();
+    p.begin('zombies');
     this.zombies.update(delta, this.player, this.world);
+    p.end();
+    p.begin('skeletons');
     this.skeletons.update(delta, this.player, this.world);
+    p.end();
+    p.begin('witches');
     this.witches.update(delta, this.player, this.world);
+    p.end();
+
+    p.begin('enemyEvents');
     this.handleZombieEvents();
     this.handleSkeletonArrows();
     this.handleWitchPotions();
@@ -408,10 +427,15 @@ export class Game {
     if (!this.victory && this.enemies.aliveCount() === 0) {
       this.advanceWave();
     }
+    p.end();
+    p.begin('weapons');
     this.weapons.update(delta);
     this.updateBombs(delta);
     this.updateSlashPhase(delta);
+    p.end();
+    p.begin('effects');
     this.effects.update(delta);
+    p.end();
 
     // Left click and the E key both attack / use the selected item.
     const attackClicked = this.input.consume('attack');
@@ -447,10 +471,15 @@ export class Game {
 
     this.updateTargetOutline();
     this.effects.applyCameraShake(this.camera);
+    p.begin('hud');
     this.renderHud();
+    p.end();
 
+    p.begin('render');
     this.renderer.render(this.scene, this.activeCamera);
+    p.end();
     this.input.update();
+    p.endFrame();
   }
 
   renderHud() {
@@ -1204,6 +1233,7 @@ export class Game {
 
   dispose() {
     this.platform.loop.stop();
+    this.profiler.dispose?.();
     this.hud.destroy?.();
     this.shop?.hide?.();
     this.removeAerialCircle();
