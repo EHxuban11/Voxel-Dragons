@@ -311,12 +311,21 @@ export class Game {
     }
 
     // Lots of zombies (increasing), fewer skeletons, fewer witches, fewest dragons.
+    // Waves mode wave 5: the red miniboss appears and the rest of the wave is lighter.
     const w = this.wave;
-    this.zombies.spawnWave(2 + w, this.player, this.world);
-    this.skeletons.spawnWave(Math.ceil(w * 0.6), this.player, this.world);
-    this.witches.spawnWave(Math.floor(w * 0.35), this.player, this.world);
-    this.dragons.spawnWave(Math.max(1, Math.ceil(w * 0.3)));
-    this.hud.showMessage(`Oleada ${this.wave}`, 1500);
+    const bossWave = !this.isCampaign && w === BALANCE.boss.wave;
+    const scale = bossWave ? BALANCE.boss.enemyScale : 1;
+    this.zombies.spawnWave(Math.ceil((2 + w) * scale), this.player, this.world);
+    this.skeletons.spawnWave(Math.ceil(w * 0.6 * scale), this.player, this.world);
+    this.witches.spawnWave(Math.floor(w * 0.35 * scale), this.player, this.world);
+    if (bossWave) {
+      this.dragons.spawnWave(0); // clear regular dragons...
+      this.dragons.spawnBoss(this.player, BALANCE.boss); // ...and bring the miniboss
+      this.hud.showMessage('☠ MINIBOSS: Dragón Rojo', 2600);
+    } else {
+      this.dragons.spawnWave(Math.max(1, Math.ceil(w * 0.3)));
+      this.hud.showMessage(`Oleada ${this.wave}`, 1500);
+    }
   }
 
   setupScene() {
@@ -1651,17 +1660,25 @@ export class Game {
 
   handleDragonFireballs() {
     for (const ball of this.dragons.consumeImpacts()) {
-      this.effects.explosion(ball.position);
-      this.audio.explosion();
+      // Effect depends on the impact kind: small bullets/bolts spark, fire-zone
+      // ticks have no impact effect (the burning circle is already drawn), and
+      // everything else (fireballs, the boss ground ball) explodes.
+      if (ball.kind === 'spark') {
+        this.effects.impact(ball.position, 0xff5a2a);
+      } else if (ball.kind !== 'fire') {
+        this.effects.explosion(ball.position);
+        this.audio.explosion();
+      }
       if (ball.hitPlayer && ball.damage > 0) {
-        if (this.parryWindowTimer > 0 && !this.samuraiBuffActive) {
+        // Fire-zone ticks can't be parried/reflected; you must leave the fire.
+        if (ball.kind !== 'fire' && this.parryWindowTimer > 0 && !this.samuraiBuffActive) {
           this.samuraiParrySuccess();
           continue;
         }
         if (this.player.invulnerable) continue;
         this.player.damage(ball.damage);
         this.hud.flashDamage();
-        this.audio.damage();
+        if (ball.kind !== 'fire') this.audio.damage();
       }
     }
   }

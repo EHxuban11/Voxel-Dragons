@@ -32,6 +32,8 @@ export class DragonManager {
     this.dragons = [];
     this.fireballs = [];
     this.impacts = [];
+    this.bossProjectiles = []; // miniboss: ground balls, homing bolts, MG bullets
+    this.fireZones = [];        // miniboss: burning ground hazards
     this.tmpPlayerPosition = new THREE.Vector3();
     this.tmpTarget = new THREE.Vector3();
     this.tmpDirection = new THREE.Vector3();
@@ -191,11 +193,71 @@ export class DragonManager {
       if (dragon.healthBar) this.group.remove(dragon.healthBar);
     }
     this.dragons.length = 0;
+    for (const p of this.bossProjectiles) this.group.remove(p.mesh);
+    for (const z of this.fireZones) { this.group.remove(z.mesh); z.mesh.geometry.dispose?.(); z.material.dispose?.(); }
+    this.bossProjectiles.length = 0;
+    this.fireZones.length = 0;
   }
 
   spawnWave(count) {
     this.clearDragons();
     this.spawnDragons(Math.max(0, Math.floor(count)));
+  }
+
+  // Wave-5 miniboss: one big red dragon with far more HP that cycles attacks.
+  spawnBoss(player, config) {
+    this.bossConfig = config;
+    this.material.bossBall = this.material.bossBall
+      || new THREE.MeshStandardMaterial({ color: config.fire, emissive: config.fire, emissiveIntensity: 1.6, roughness: 0.5, flatShading: true });
+    this.material.bossBolt = this.material.bossBolt
+      || new THREE.MeshStandardMaterial({ color: 0xff7a2a, emissive: 0xff5a10, emissiveIntensity: 1.8, roughness: 0.5, flatShading: true });
+    this.material.bossBullet = this.material.bossBullet
+      || new THREE.MeshBasicMaterial({ color: 0xffd060 });
+
+    const center = getWorldPosition(player, this.tmpPlayerPosition);
+    const boss = {
+      id: this.dragons.length,
+      boss: true,
+      health: config.health,
+      maxHealth: config.health,
+      aggression: 0.75,
+      angle: 0,
+      altitude: (this.minAltitude + this.maxAltitude) / 2,
+      orbitRadius: 15,
+      radiusAmplitude: 4,
+      radiusRate: 0.4,
+      radiusPhase: 0,
+      speed: 0.5,
+      attackCooldown: 0,
+      attackTimer: 2,
+      lastAttack: null,
+      burst: null,
+      mesh: this.createBossMesh(config),
+      healthBar: this.createHealthBar(),
+      velocity: new THREE.Vector3(),
+      dead: false,
+    };
+    boss.mesh.position.set(center.x + 16, boss.altitude, center.z);
+    boss.mesh.userData.dragon = boss;
+    this.group.add(boss.mesh);
+    this.group.add(boss.healthBar);
+    this.dragons.push(boss);
+    return boss;
+  }
+
+  createBossMesh(config) {
+    const mesh = this.createDragonMesh(this.dragons.length);
+    mesh.scale.setScalar(config.scale ?? 1.9);
+    // Clone + tint to red so the other dragons keep their dark materials.
+    mesh.traverse((child) => {
+      if (!child.isMesh || !child.material) return;
+      const m = child.material.clone();
+      if (m.color) m.color.setHex(config.color ?? 0xb01818);
+      if (m.emissive) { m.emissive.setHex(config.fire ?? 0xff3a10); m.emissiveIntensity = 0.6; }
+      child.material = m;
+      child.userData.dragonRoot = mesh; // keep the raycast root tag after cloning
+    });
+    return mesh;
   }
 
   _box(w, h, d, material = this.material.body, cast = true) {
@@ -334,11 +396,14 @@ export class DragonManager {
     for (const dragon of this.dragons) {
       if (dragon.dead) continue;
       this.updateDragon(dragon, dt, playerPosition);
-      this.tryFireball(dragon, dt, player, playerPosition);
+      if (dragon.boss) this.updateBoss(dragon, dt, player, playerPosition);
+      else this.tryFireball(dragon, dt, player, playerPosition);
       this.updateHealthBar(dragon);
     }
 
     this.updateFireballs(dt, player, playerPosition);
+    this.updateBossProjectiles(dt, player, playerPosition);
+    this.updateFireZones(dt, player, playerPosition);
   }
 
   updateDragon(dragon, delta, playerPosition) {
@@ -532,6 +597,160 @@ export class DragonManager {
         this.impacts.push({ position: fireball.position.clone(), damage: data.damage, hitPlayer });
         this.group.remove(fireball);
         this.fireballs.splice(i, 1);
+      }
+    }
+  }
+
+  // --- miniboss attack cycle --------------------------------------------------
+  updateBoss(dragon, dt, player, playerPos) {
+    if (!player) return;
+    const cfg = this.bossConfig;
+
+    // A machine-gun burst in progress: emit one bullet per sub-interval.
+    if (dragon.burst) {
+      dragon.burst.timer -= dt;
+      if (dragon.burst.timer <= 0) {
+        this._bossBullet(dragon, playerPos, cfg.machinegun);
+        dragon.burst.left -= 1;
+        dragon.burst.timer = cfg.machinegun.interval;
+        if (dragon.burst.left <= 0) dragon.burst = null;
+      }
+      return;
+    }
+
+    dragon.attackTimer -= dt;
+    if (dragon.attackTimer > 0) return;
+
+    // Rotate between attacks semi-randomly (no immediate repeat).
+    const choices = ['ground', 'homing', 'machinegun'].filter((a) => a !== dragon.lastAttack);
+    const attack = choices[Math.floor(Math.random() * choices.length)];
+    dragon.lastAttack = attack;
+    const [lo, hi] = cfg.attackEvery;
+    dragon.attackTimer = lo + Math.random() * (hi - lo);
+
+    if (attack === 'ground') {
+      for (let i = 0; i < cfg.ground.count; i += 1) this._bossGround(dragon, playerPos, cfg.ground, i);
+    } else if (attack === 'homing') {
+      for (let i = 0; i < cfg.homing.count; i += 1) this._bossHoming(dragon, playerPos, cfg.homing);
+    } else {
+      dragon.burst = { left: cfg.machinegun.burst, timer: 0 };
+    }
+  }
+
+  _bossProjectile(material, scale, position) {
+    const mesh = new THREE.Mesh(this.geometry.fireball, material);
+    mesh.scale.setScalar(scale);
+    mesh.position.copy(position);
+    mesh.frustumCulled = false;
+    this.group.add(mesh);
+    return mesh;
+  }
+
+  _bossGround(dragon, playerPos, cfg, i) {
+    const target = playerPos.clone();
+    target.x += (Math.random() - 0.5) * 5 + i * 1.6;
+    target.z += (Math.random() - 0.5) * 5;
+    target.y = this.world?.getGroundHeight?.(target.x, target.z) ?? (playerPos.y - 1);
+    const from = dragon.mesh.position.clone();
+    const dir = target.clone().sub(from);
+    if (dir.lengthSq() < 0.0001) return;
+    dir.normalize();
+    const mesh = this._bossProjectile(this.material.bossBall, 2.4, from);
+    this.bossProjectiles.push({ type: 'ground', mesh, position: from, velocity: dir.multiplyScalar(cfg.speed), targetY: target.y, life: 5, damage: cfg.damage, radius: 1.3, cfg });
+  }
+
+  _bossHoming(dragon, playerPos, cfg) {
+    const from = dragon.mesh.position.clone();
+    const dir = playerPos.clone().sub(from).normalize();
+    dir.x += (Math.random() - 0.5) * 0.25;
+    dir.y += (Math.random() - 0.5) * 0.15;
+    dir.z += (Math.random() - 0.5) * 0.25;
+    dir.normalize();
+    const mesh = this._bossProjectile(this.material.bossBolt, 0.7, from);
+    this.bossProjectiles.push({ type: 'homing', mesh, position: from, velocity: dir.multiplyScalar(cfg.speed), speed: cfg.speed, turn: cfg.turn, life: cfg.life, damage: cfg.damage, radius: cfg.radius });
+  }
+
+  _bossBullet(dragon, playerPos, cfg) {
+    const from = dragon.mesh.position.clone();
+    const dir = playerPos.clone().sub(from).normalize();
+    dir.x += (Math.random() - 0.5) * cfg.spread;
+    dir.y += (Math.random() - 0.5) * cfg.spread;
+    dir.z += (Math.random() - 0.5) * cfg.spread;
+    dir.normalize();
+    const mesh = this._bossProjectile(this.material.bossBullet, 0.32, from);
+    this.bossProjectiles.push({ type: 'bullet', mesh, position: from, velocity: dir.multiplyScalar(cfg.speed), life: cfg.life, damage: cfg.damage, radius: cfg.radius });
+  }
+
+  updateBossProjectiles(dt, player, playerPos) {
+    for (let i = this.bossProjectiles.length - 1; i >= 0; i -= 1) {
+      const p = this.bossProjectiles[i];
+      p.life -= dt;
+
+      if (p.type === 'homing' && player) {
+        this.tmpDirection.subVectors(playerPos, p.position);
+        if (this.tmpDirection.lengthSq() > 0.0001) {
+          this.tmpDirection.normalize().multiplyScalar(p.speed);
+          p.velocity.lerp(this.tmpDirection, Math.min(1, dt * p.turn));
+        }
+      }
+
+      p.position.addScaledVector(p.velocity, dt);
+      p.mesh.position.copy(p.position);
+
+      const blocked = this._fireballBlocked(p.position); // terrain = cover
+      const hitPlayer = Boolean(player) && p.position.distanceTo(playerPos) <= p.radius + 0.6;
+
+      if (p.type === 'ground' && (blocked || p.position.y <= p.targetY || hitPlayer)) {
+        this.spawnFireZone(p.position.clone(), p.cfg);
+        this.impacts.push({ position: p.position.clone(), damage: hitPlayer ? p.damage : 0, hitPlayer, kind: 'explosion' });
+        this._removeBossProjectile(i);
+      } else if (hitPlayer) {
+        this.impacts.push({ position: p.position.clone(), damage: p.damage, hitPlayer: true, kind: 'spark' });
+        this._removeBossProjectile(i);
+      } else if (blocked || p.life <= 0 || p.position.y < -2) {
+        if (blocked && p.type === 'homing') this.impacts.push({ position: p.position.clone(), damage: 0, hitPlayer: false, kind: 'spark' });
+        this._removeBossProjectile(i);
+      }
+    }
+  }
+
+  _removeBossProjectile(i) {
+    this.group.remove(this.bossProjectiles[i].mesh);
+    this.bossProjectiles.splice(i, 1);
+  }
+
+  spawnFireZone(position, cfg) {
+    position.y = this.world?.getGroundHeight?.(position.x, position.z) ?? position.y;
+    const geometry = new THREE.CircleGeometry(cfg.zoneRadius, 28);
+    geometry.rotateX(-Math.PI / 2);
+    const material = new THREE.MeshBasicMaterial({ color: 0xff5a18, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(position);
+    mesh.position.y += 0.06;
+    mesh.frustumCulled = false;
+    this.group.add(mesh);
+    this.fireZones.push({ mesh, material, position: position.clone(), radius: cfg.zoneRadius, dps: cfg.zoneDps, ttl: cfg.zoneTtl, age: 0, tick: 0, tickRate: cfg.tickRate });
+  }
+
+  updateFireZones(dt, player, playerPos) {
+    for (let i = this.fireZones.length - 1; i >= 0; i -= 1) {
+      const z = this.fireZones[i];
+      z.age += dt;
+      z.tick -= dt;
+      z.material.opacity = 0.28 + 0.32 * (0.7 + 0.3 * Math.sin(this.elapsed * 14 + i)) * THREE.MathUtils.clamp(1 - z.age / z.ttl, 0, 1);
+      if (z.tick <= 0 && player) {
+        z.tick = z.tickRate;
+        const dx = playerPos.x - z.position.x;
+        const dz = playerPos.z - z.position.z;
+        if (Math.hypot(dx, dz) <= z.radius && Math.abs(playerPos.y - z.position.y) < 3) {
+          this.impacts.push({ position: playerPos.clone(), damage: z.dps * z.tickRate, hitPlayer: true, kind: 'fire' });
+        }
+      }
+      if (z.age >= z.ttl) {
+        this.group.remove(z.mesh);
+        z.mesh.geometry.dispose();
+        z.material.dispose();
+        this.fireZones.splice(i, 1);
       }
     }
   }
@@ -778,7 +997,11 @@ export class DragonManager {
     for (const fireball of this.fireballs) {
       this.group.remove(fireball);
     }
+    for (const p of this.bossProjectiles) this.group.remove(p.mesh);
+    for (const z of this.fireZones) { this.group.remove(z.mesh); z.mesh.geometry.dispose(); z.material.dispose(); }
     this.fireballs.length = 0;
+    this.bossProjectiles.length = 0;
+    this.fireZones.length = 0;
     this.impacts.length = 0;
     this.dragons.length = 0;
 

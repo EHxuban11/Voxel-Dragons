@@ -330,6 +330,23 @@ export const BALANCE = deepFreeze({
     weaponAmmo: { Rifle: 90, Shotgun: 24, Blaster: 6 },
   },
 
+  // Wave-5 miniboss (waves mode only): a big red dragon that cycles attacks.
+  boss: {
+    wave: 5,
+    enemyScale: 0.5,   // fewer regular enemies on the boss wave
+    health: 900,
+    scale: 1.9,        // model size multiplier
+    color: 0xb01818,
+    fire: 0xff3a10,
+    // Big ground ball -> a burning circle that hurts per second for a while.
+    ground: { speed: 17, damage: 10, count: 2, zoneRadius: 4.2, zoneDps: 22, zoneTtl: 5, tickRate: 0.5 },
+    // Fast little bolts with slight auto-aim.
+    homing: { speed: 30, damage: 9, count: 5, turn: 2.2, life: 3, radius: 0.7 },
+    // Machine-gun: many tiny fast bullets, only dodgeable behind cover.
+    machinegun: { speed: 46, damage: 4, burst: 22, interval: 0.06, spread: 0.07, life: 2.2, radius: 0.45 },
+    attackEvery: [1.6, 2.6], // random gap (min,max) between attack patterns
+  },
+
   shop: {
     items: [
       { id: 'damage', name: '+25% Daño', emoji: '⚔️', cost: 18 },
