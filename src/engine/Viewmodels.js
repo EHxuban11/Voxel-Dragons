@@ -362,6 +362,19 @@ export function buildBlaster() {
   return anchor(g, 0.34, -0.3, -0.72);
 }
 
+// Luffy: no weapon — the fist itself is held forward (the arm is added by
+// addArm, so this is the prominent clenched hand).
+function buildFist() {
+  const group = new THREE.Group();
+  const fist = box(0.36, 0.34, 0.36, 0xe7b48a, { roughness: 0.95, metalness: 0 });
+  fist.position.set(0, -0.02, -0.12);
+  group.add(fist);
+  const knuckles = box(0.38, 0.12, 0.14, 0xdca27a, { roughness: 0.95, metalness: 0 });
+  knuckles.position.set(0, 0.08, -0.28);
+  group.add(knuckles);
+  return anchor(group, 0.3, -0.34, -0.5);
+}
+
 export function buildViewmodel(kind, opts = {}) {
   let model = null;
   switch (kind) {
@@ -375,6 +388,7 @@ export function buildViewmodel(kind, opts = {}) {
     case 'katana-drawn': model = buildKatana(true); break;
     case 'staff': model = buildStaff(); break;
     case 'bomb': model = buildBombHand(opts.hasBomb !== false); break;
+    case 'fist': model = buildFist(); break;
     default: return null;
   }
   // Every character grips their weapon with a blocky arm.

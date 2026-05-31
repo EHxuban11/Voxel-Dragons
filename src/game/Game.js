@@ -19,6 +19,7 @@ import { buildAvatar, buildNameTag } from '../engine/Avatars.js';
 import { Shop } from '../ui/Shop.js';
 import { getIcon } from '../ui/Icons.js';
 import { MageController } from './combat/MageController.js';
+import { LuffyController } from './combat/LuffyController.js';
 import { BALANCE } from '../core/config/GameBalance.js';
 
 export class Game {
@@ -242,6 +243,15 @@ export class Game {
           camera: this.camera, audio: this.audio, hud: this.hud,
         })
       : null;
+    // Luffy: arm-weapon kit with a gear gauge.
+    this.luffy = this.character.loadout === 'gum'
+      ? new LuffyController({
+          scene: this.scene, effects: this.effects, world: this.world,
+          enemies: this.enemies, player: this.player,
+          camera: this.camera, audio: this.audio, hud: this.hud,
+        })
+      : null;
+    this._luffyLastHp = this.player.health + this.player.shield;
     this.shop = null;
     this.shopDone = false;
     this.victory = false;
@@ -669,6 +679,13 @@ export class Game {
     this.world.update(delta);
     p.end();
     if (this.mage) { p.begin('mage'); this.mage.update(delta); p.end(); } // before enemies so the tornado can lift them
+    if (this.luffy) {
+      this.luffy.update(delta);
+      // Getting hit empties the gear gauge: watch the combined HP for a drop.
+      const hp = this.player.health + this.player.shield;
+      if (hp < this._luffyLastHp - 0.001) this.luffy.onPlayerHit();
+      this._luffyLastHp = hp;
+    }
     p.begin('dragons');
     this.dragons.update(delta, this.player, this.scene);
     p.end();
@@ -789,6 +806,13 @@ export class Game {
     if (this.character.loadout === 'katana' && this.inventory.slots[0]) {
       this.inventory.slots[0].icon = this.samuraiBuffActive ? 'katana-drawn' : 'katana-sheathed';
     }
+    // Luffy's hotbar slot labels rename per form (e.g. Pistol -> Kong Gun).
+    if (this.luffy) {
+      const labels = this.luffy.currentLabels();
+      for (const slot of this.inventory.slots) {
+        if (labels[slot.abilityId]) slot.label = labels[slot.abilityId];
+      }
+    }
     const selectedSlot = this.inventory.selectedSlot;
     const isMelee = selectedSlot?.kind === 'melee';
     const weaponId = selectedSlot?.kind === 'weapon' ? this.weapons.currentWeapon?.id : null;
@@ -818,6 +842,7 @@ export class Game {
       fps: this.fps,
       countdown: this.waveCountdown,
       inventory: this.inventory.snapshot(),
+      gear: this.luffy ? { name: this.luffy.gearName, ratio: this.luffy.gaugeRatio } : null,
       locked: this.input.pointerLocked
     });
   }
@@ -1619,11 +1644,12 @@ export class Game {
       // The mage grips a glowing staff for any spell; the hunter holds a bomb
       // for the bomb slot and the dagger for the aerial strike.
       else if (this.character.loadout === 'spells') kind = 'staff';
+      else if (this.character.loadout === 'gum') kind = 'fist'; // Luffy: his arm is the weapon
       else if (slot.abilityId === 'bomb') kind = 'bomb';
       else if (slot.abilityId === 'aerial') kind = 'dagger';
     }
 
-    const sleeveByLoadout = { guns: 0xffd166, sword: 0x9aa6b2, dagger: 0x3f6b3a, katana: 0xb33636, spells: 0x6a3fb5 };
+    const sleeveByLoadout = { guns: 0xffd166, sword: 0x9aa6b2, dagger: 0x3f6b3a, katana: 0xb33636, spells: 0x6a3fb5, gum: 0xd23b2b };
     const hasBomb = slot?.abilityId === 'bomb' ? (slot.count ?? 0) > 0 : true;
     const model = kind ? buildViewmodel(kind, { sleeve: sleeveByLoadout[this.character.loadout] ?? 0x6d6d6d, hasBomb }) : null;
     if (model) {
@@ -1642,6 +1668,9 @@ export class Game {
         break;
       case 'dash':
         this.activateDash();
+        break;
+      case 'luffy':
+        this.luffy?.secondary();
         break;
       default:
         this.placeSelectedBlock();
@@ -1669,6 +1698,8 @@ export class Game {
       this.samuraiSpecial();
     } else if (this.mage && BALANCE.mage.skills[slot.abilityId]) {
       this.mage.tryCast(slot.abilityId);
+    } else if (this.luffy && ['pistol', 'bazooka', 'gatling'].includes(slot.abilityId)) {
+      this.luffy.useSkill(slot.abilityId);
     }
   }
 
@@ -1973,6 +2004,7 @@ export class Game {
     this.shop?.hide?.();
     this.removeAerialCircle();
     this.mage?.dispose?.();
+    this.luffy?.dispose?.();
     for (const bomb of this.bombs) this.scene.remove(bomb.mesh);
     this.bombs.length = 0;
     for (const s of this.samuraiSlashes) this.scene.remove(s.group);

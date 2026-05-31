@@ -33,6 +33,14 @@ function buildSlots(character, options = {}) {
       { kind: 'ability', abilityId: 'aerial', label: 'ataque to guapo', count: null, color: '#66ccff', icon: 'slash' },
     ];
   }
+  if (character?.loadout === 'gum') {
+    // Luffy's three Gear-1 skills (the Gear-2 giant punch is the secondary action).
+    return [
+      { kind: 'ability', abilityId: 'pistol', label: 'Pistol', count: null, color: '#e8553a', icon: 'slash' },
+      { kind: 'ability', abilityId: 'bazooka', label: 'Bazooka', count: null, color: '#d98b2b', icon: 'slash' },
+      { kind: 'ability', abilityId: 'gatling', label: 'Gatling', count: null, color: '#c0392b', icon: 'slash' },
+    ];
+  }
   if (character?.loadout === 'spells') {
     return [
       { kind: 'ability', abilityId: 'fireball', label: 'Bola de fuego', count: null, color: '#ff6b1a', icon: 'fireball' },

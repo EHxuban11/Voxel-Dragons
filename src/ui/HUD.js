@@ -262,6 +262,45 @@ function injectStyles() {
       transition: transform 120ms ease-out, filter 120ms ease-out;
     }
 
+    /* Luffy's gear gauge: a vertical bar pinned to the right edge. */
+    .vd-gearbar {
+      position: absolute;
+      right: 22px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .vd-gearbar.is-active { display: flex; }
+    .vd-gear-name {
+      color: #ffd9a0;
+      font-size: 12px;
+      text-shadow: 0 1px 2px #000;
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      letter-spacing: 1px;
+    }
+    .vd-gear-shell {
+      width: 20px;
+      height: 230px;
+      background: rgba(8, 10, 14, 0.65);
+      border: 2px solid rgba(255, 255, 255, 0.25);
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      align-items: flex-end;
+    }
+    .vd-gear-fill {
+      width: 100%;
+      height: 100%;
+      transform-origin: bottom center;
+      transform: scaleY(0);
+      background: linear-gradient(0deg, #ff5a18, #ff9f3a 60%, #ffe066);
+      transition: transform 110ms ease-out;
+    }
+
     .vd-weapon {
       color: #e9f6ff;
       font-size: 15px;
@@ -742,6 +781,10 @@ export class HUD {
         <div class="vd-ammo" data-hud="ammo">0</div>
       </div>
       <div class="vd-hotbar" data-hud="hotbar"></div>
+      <div class="vd-gearbar" data-hud="gearbar">
+        <div class="vd-gear-name" data-hud="gearName">Gear 1</div>
+        <div class="vd-gear-shell"><div class="vd-gear-fill" data-hud="gearFill"></div></div>
+      </div>
     `;
 
     this.nodes = {
@@ -769,6 +812,9 @@ export class HUD {
       message: this.root.querySelector('[data-hud="message"]'),
       hotbar: this.root.querySelector('[data-hud="hotbar"]'),
       inventoryPanel: this.root.querySelector('[data-hud="inventoryPanel"]'),
+      gearbar: this.root.querySelector('[data-hud="gearbar"]'),
+      gearName: this.root.querySelector('[data-hud="gearName"]'),
+      gearFill: this.root.querySelector('[data-hud="gearFill"]'),
     };
 
     this.waveCells = [];
@@ -840,6 +886,18 @@ export class HUD {
         this.nodes.countdown.innerHTML = `Siguiente oleada en <span class="vd-count-num">${Math.ceil(countdown)}</span>`;
       } else {
         this.nodes.countdown.classList.remove('is-active');
+      }
+    }
+
+    // Luffy's gear gauge (right edge). Hidden for every other character.
+    const gear = nextState.gear;
+    if (this.nodes.gearbar) {
+      if (gear) {
+        this.nodes.gearbar.classList.add('is-active');
+        this.nodes.gearName.textContent = gear.name;
+        this.nodes.gearFill.style.transform = `scaleY(${Math.max(0, Math.min(1, gear.ratio ?? 0))})`;
+      } else {
+        this.nodes.gearbar.classList.remove('is-active');
       }
     }
 

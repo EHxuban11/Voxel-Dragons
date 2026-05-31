@@ -60,6 +60,17 @@ export const CHARACTERS = [
     speedMult: 0.8,
     manaName: true,
   },
+  {
+    id: 'luffy',
+    name: 'Luffy',
+    emoji: '🥊',
+    loadout: 'gum', // his arm is the weapon; a gear gauge fills by hitting enemies
+    canPlaceBlocks: false,
+    ability: 'luffy', // right click / F: the Gear-2 giant punch
+    health: 110,
+    shield: 40,
+    speedMult: 0.95,
+  },
 ];
 
 export function getCharacter(id) {

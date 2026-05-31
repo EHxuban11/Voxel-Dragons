@@ -260,6 +260,44 @@ export const BALANCE = deepFreeze({
     },
   },
 
+  // Luffy: his arm is the weapon. A gear gauge on the right fills by hitting
+  // enemies and empties when he is hit; each gear needs more to fill. Filling
+  // it advances the form (Gear 1 -> 2 -> Gear 4 Boundman -> Snakeman -> Gear 5).
+  // Three hotbar skills (a single punch / bazooka / gatling barrage) plus a
+  // right-click special whose move depends on the form.
+  luffy: {
+    gearNames: ['Gear 1', 'Gear 2', 'Gear 4: Boundman', 'Gear 4: Snakeman', 'Gear 5'],
+    gaugeMax: [8, 13, 20, 30, 42], // fill needed per gear (harder each time)
+    // Gear-1 archetypes for the three hotbar slots.
+    base: {
+      // Pistol: one fast long-range stretch punch.
+      pistol: { damage: 30, range: 9, halfWidth: 1.2, cooldown: 0.5, fill: 2, knockback: 3 },
+      // Bazooka: both arms wind back then slam forward — heavy, knocks back.
+      bazooka: { damage: 75, range: 8, halfWidth: 2.4, cooldown: 3.0, fill: 3, knockback: 9 },
+      // Gatling: a 2s barrage of forward punches.
+      gatling: { damage: 9, range: 8, halfWidth: 2.2, cooldown: 6.0, fill: 0.4, knockback: 0, duration: 2.0, interval: 0.08 },
+    },
+    // Per-form tuning. mults scale the archetypes; `secondary` is the right-click
+    // move; `labels` rename the hotbar slots. Snakeman + Gear 5 reuse Gear 1.
+    gears: [
+      { smoke: false, dmg: 1.0, range: 1.0, cd: 1.0, width: 1.0, secondary: 'none',
+        labels: { pistol: 'Pistol', bazooka: 'Bazooka', gatling: 'Gatling' } },
+      { smoke: true, dmg: 1.7, range: 1.3, cd: 0.6, width: 1.15, secondary: 'cannon',
+        labels: { pistol: 'Pistol', bazooka: 'Bazooka', gatling: 'Gatling' } },
+      { smoke: true, dmg: 2.1, range: 1.3, cd: 0.55, width: 1.7, secondary: 'kingkong',
+        labels: { pistol: 'Kong Gun', bazooka: 'Bazooka', gatling: 'Kong Gatling' } },
+      { smoke: false, dmg: 1.0, range: 1.0, cd: 1.0, width: 1.0, secondary: 'none',
+        labels: { pistol: 'Pistol', bazooka: 'Bazooka', gatling: 'Gatling' } },
+      { smoke: false, dmg: 1.0, range: 1.0, cd: 1.0, width: 1.0, secondary: 'none',
+        labels: { pistol: 'Pistol', bazooka: 'Bazooka', gatling: 'Gatling' } },
+    ],
+    // Right-click specials.
+    // Gear 2 — Cañón: a huge forward punch that spends the form back to Gear 1.
+    cannon: { damage: 420, range: 12, halfWidth: 4.5, knockback: 18, cooldown: 0.4 },
+    // Boundman — King Kong Gun: leap up, then a giant ground slam (AoE).
+    kingkong: { damage: 320, radius: 7, knockback: 16, cooldown: 4.0, jump: 13, slamDelay: 0.42 },
+  },
+
   progression: {
     waveCount: 10, // total waves in a run
     shopWave: 5, // the shop opens before this wave
