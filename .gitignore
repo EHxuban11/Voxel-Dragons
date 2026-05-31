@@ -4,3 +4,4 @@ dist/
 *.log
 wasm/*.wasm
 profiling/
+.claude/worktrees/
