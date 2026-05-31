@@ -761,13 +761,7 @@ export class HUD {
     };
 
     this.waveCells = [];
-    for (let i = 1; i <= DEFAULT_STATE.waveCount; i += 1) {
-      const cell = document.createElement('div');
-      cell.className = 'vd-wave-cell';
-      cell.textContent = String(i);
-      this.nodes.wavebar.appendChild(cell);
-      this.waveCells.push(cell);
-    }
+    this.buildWaveCells(DEFAULT_STATE.waveCount);
 
     this.container.appendChild(this.root);
     this.update(DEFAULT_STATE);
@@ -775,6 +769,20 @@ export class HUD {
 
   showDeathScreen() {
     this.nodes.deathscreen.classList.add('is-active');
+  }
+
+  // (Re)build the wave bar to hold exactly `count` numbered cells. Campaign has
+  // 20 waves vs 10 in waves mode, so the bar adapts to the active run.
+  buildWaveCells(count) {
+    this.nodes.wavebar.innerHTML = '';
+    this.waveCells = [];
+    for (let i = 1; i <= count; i += 1) {
+      const cell = document.createElement('div');
+      cell.className = 'vd-wave-cell';
+      cell.textContent = String(i);
+      this.nodes.wavebar.appendChild(cell);
+      this.waveCells.push(cell);
+    }
   }
 
   update(state = {}) {
@@ -806,6 +814,8 @@ export class HUD {
     this.nodes.guard.classList.toggle('is-active', Boolean(nextState.guard));
 
     const wave = firstNumber(nextState, ['wave'], DEFAULT_STATE.wave);
+    const waveCount = firstNumber(nextState, ['waveCount'], DEFAULT_STATE.waveCount);
+    if (this.waveCells.length !== waveCount) this.buildWaveCells(waveCount);
     for (let i = 0; i < this.waveCells.length; i += 1) {
       const cell = this.waveCells[i];
       const cellWave = i + 1;

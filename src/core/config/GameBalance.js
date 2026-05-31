@@ -311,6 +311,25 @@ export const BALANCE = deepFreeze({
     color: 0xff2020,
   },
 
+  // Campaign mode (vs the default "waves" mode). The duck starts with only the
+  // pistol, plays 20 waves, shops every 5, and ground mobs have a head hitbox
+  // that pays bonus coins on a killing headshot.
+  campaign: {
+    waveCount: 20,
+    shopEvery: 5,
+    headshotDamageMult: 2,
+    headshotBonusCoins: 4,
+    startWeapons: ['pistol'],
+    // Guns sold in the campaign shop (the same arsenal as waves mode).
+    shopWeapons: [
+      { id: 'rifle', name: 'Rifle', cost: 28 },
+      { id: 'shotgun', name: 'Shotgun', cost: 22 },
+      { id: 'blaster', name: 'Blaster', cost: 46 },
+    ],
+    // Reserve ammo granted when a gun is bought.
+    weaponAmmo: { Rifle: 90, Shotgun: 24, Blaster: 6 },
+  },
+
   shop: {
     items: [
       { id: 'damage', name: '+25% Daño', emoji: '⚔️', cost: 18 },

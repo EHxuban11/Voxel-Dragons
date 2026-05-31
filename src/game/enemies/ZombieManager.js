@@ -51,6 +51,7 @@ export class ZombieManager {
     this.bounds = { ...DEFAULT_BOUNDS, ...(options.bounds ?? {}) };
     this.health = options.health ?? 30;
     this.speed = options.speed ?? 3.4;
+    this.headshotDamageMult = options.headshotDamageMult ?? 1; // >1 in campaign
     this.damage = options.damage ?? 8;
     this.attackRange = options.attackRange ?? 2.3;
     this.attackCooldown = options.attackCooldown ?? 1.1;
@@ -86,6 +87,7 @@ export class ZombieManager {
     const head = new THREE.Mesh(this.geometry.head, this.material.head);
     head.position.y = 1.6;
     head.castShadow = true;
+    head.userData.isHead = true; // headshot hitbox
     zombie.add(head);
 
     // Outstretched arms so it reads as a zombie shambling forward.
@@ -354,7 +356,7 @@ export class ZombieManager {
     const root = hits[0].object.userData.zombieRoot;
     const zombie = this.zombies.find((candidate) => candidate.mesh === root);
     if (!zombie || zombie.dead) return null;
-    return { zombie, point: hits[0].point.clone(), distance: hits[0].distance };
+    return { zombie, point: hits[0].point.clone(), distance: hits[0].distance, head: Boolean(hits[0].object.userData.isHead) };
   }
 
   // Applies damage. The invincible training dummy just tallies the damage.
@@ -373,7 +375,8 @@ export class ZombieManager {
 
   applyRayHit(peek, damage) {
     const zombie = peek.zombie;
-    const killed = this.damageZombie(zombie, damage);
+    const dmg = peek.head ? damage * this.headshotDamageMult : damage;
+    const killed = this.damageZombie(zombie, dmg);
     return {
       dragon: null,
       zombie,
@@ -381,6 +384,7 @@ export class ZombieManager {
       distance: peek.distance,
       killed,
       health: zombie.health,
+      headshot: Boolean(peek.head),
     };
   }
 
@@ -415,8 +419,9 @@ export class ZombieManager {
       const zombie = this.zombies.find((candidate) => candidate.mesh === root);
       if (!zombie || zombie.dead || seen.has(zombie.id)) continue;
       seen.add(zombie.id);
-      const killed = this.damageZombie(zombie, damage);
-      results.push({ dragon: null, zombie, point: intersection.point.clone(), distance: intersection.distance, killed, health: zombie.health });
+      const head = Boolean(intersection.object.userData.isHead);
+      const killed = this.damageZombie(zombie, head ? damage * this.headshotDamageMult : damage);
+      results.push({ dragon: null, zombie, point: intersection.point.clone(), distance: intersection.distance, killed, health: zombie.health, headshot: head });
     }
     return results;
   }

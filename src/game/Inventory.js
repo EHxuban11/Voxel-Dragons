@@ -1,9 +1,11 @@
-// Duck guns in order: pistol, shotgun, rifle, blaster.
+// Duck guns in order: pistol, shotgun, rifle, blaster. `id` matches BALANCE
+// weapon ids so a loadout can be restricted (campaign starts with the pistol)
+// and weapons can be unlocked later (bought in the campaign shop).
 const GUN_SLOTS = [
-  { kind: 'weapon', weaponIndex: 3, label: 'Pistola', count: null, color: '#fff0a0', icon: 'pistol-bullet' },
-  { kind: 'weapon', weaponIndex: 1, label: 'Shotgun', count: null, color: '#ff9f1c', icon: 'shotgun-shell' },
-  { kind: 'weapon', weaponIndex: 0, label: 'Rifle', count: null, color: '#ffd166', icon: 'rifle-bullet' },
-  { kind: 'weapon', weaponIndex: 2, label: 'Blaster', count: null, color: '#54d2ff', icon: 'blue-laser' },
+  { id: 'pistol', kind: 'weapon', weaponIndex: 3, label: 'Pistola', count: null, color: '#fff0a0', icon: 'pistol-bullet' },
+  { id: 'shotgun', kind: 'weapon', weaponIndex: 1, label: 'Shotgun', count: null, color: '#ff9f1c', icon: 'shotgun-shell' },
+  { id: 'rifle', kind: 'weapon', weaponIndex: 0, label: 'Rifle', count: null, color: '#ffd166', icon: 'rifle-bullet' },
+  { id: 'blaster', kind: 'weapon', weaponIndex: 2, label: 'Blaster', count: null, color: '#54d2ff', icon: 'blue-laser' },
 ];
 
 const BLOCK_SLOTS = [
@@ -14,7 +16,7 @@ const SWORD_SLOT = { kind: 'melee', model: 'sword', label: 'Espada', count: null
 const KATANA_SLOT = { kind: 'melee', model: 'katana', label: 'Katana', count: null, color: '#e8e2d0', icon: 'katana-sheathed' };
 const DAGGER_SLOT = { kind: 'weapon', weaponIndex: 4, label: 'Daga', count: null, color: '#cfd6df', icon: 'dagger' };
 
-function buildSlots(character) {
+function buildSlots(character, options = {}) {
   if (character?.loadout === 'sword') {
     return [{ ...SWORD_SLOT }];
   }
@@ -40,8 +42,12 @@ function buildSlots(character) {
       { kind: 'ability', abilityId: 'nuke', label: 'Nuke', count: null, color: '#ff3030', icon: 'nuke' },
     ];
   }
-  // Default (duck): guns plus buildable blocks.
-  const slots = GUN_SLOTS.map((slot) => ({ ...slot }));
+  // Default (duck): guns plus buildable blocks. `options.startWeapons` (campaign)
+  // restricts the starting guns to those ids (e.g. only the pistol).
+  const guns = (options.startWeapons
+    ? GUN_SLOTS.filter((g) => options.startWeapons.includes(g.id))
+    : GUN_SLOTS).map((slot) => ({ ...slot }));
+  const slots = guns;
   if (character?.canPlaceBlocks !== false) {
     slots.push(...BLOCK_SLOTS.map((slot) => ({ ...slot })));
   }
@@ -49,10 +55,28 @@ function buildSlots(character) {
 }
 
 export class Inventory {
-  constructor(character = null) {
-    this.slots = buildSlots(character);
+  constructor(character = null, options = {}) {
+    this.character = character;
+    this.slots = buildSlots(character, options);
     this.selectedIndex = 0;
     this.open = false;
+  }
+
+  hasWeapon(id) {
+    return this.slots.some((slot) => slot.id === id);
+  }
+
+  // Adds a gun slot (bought in the campaign shop). Inserted before the block
+  // slot so buildable blocks stay at the end of the hotbar. Returns true if added.
+  unlockWeapon(id) {
+    if (this.hasWeapon(id)) return false;
+    const template = GUN_SLOTS.find((g) => g.id === id);
+    if (!template) return false;
+    const blockIndex = this.slots.findIndex((slot) => slot.kind === 'block');
+    const slot = { ...template };
+    if (blockIndex >= 0) this.slots.splice(blockIndex, 0, slot);
+    else this.slots.push(slot);
+    return true;
   }
 
   get selectedSlot() {

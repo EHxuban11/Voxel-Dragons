@@ -103,7 +103,7 @@ function injectStyles() {
 }
 
 export class Shop {
-  constructor(container, { items, getCoins, getOwned, onBuy, onClose }) {
+  constructor(container, { items, getCoins, getOwned, onBuy, onClose, title = 'Tienda' }) {
     injectStyles();
     this.container = container;
     this.items = items;
@@ -115,7 +115,7 @@ export class Shop {
     this.root = document.createElement('div');
     this.root.className = 'vd-shop';
     this.root.innerHTML = `
-      <h1 class="vd-shop-title">Tienda · Oleada 5</h1>
+      <h1 class="vd-shop-title">${title}</h1>
       <div class="vd-shop-coins"><img class="vd-shop-coinico" src="${getGlyph('coin')}" alt="" /> <span data-shop="coins">0</span> monedas</div>
       <div class="vd-shop-items" data-shop="items"></div>
       <button class="vd-shop-continue" data-shop="continue">Continuar</button>
@@ -136,13 +136,19 @@ export class Shop {
     const coins = this.getCoins();
     this.coinsNode.textContent = String(coins);
     this.itemsNode.innerHTML = this.items.map((item) => {
+      const owned = this.getOwned(item.id);
+      const maxed = item.max != null && owned >= item.max;
       const affordable = coins >= item.cost;
+      const disabled = !affordable || maxed;
+      const ownedLabel = item.max != null
+        ? (owned > 0 ? '✓ comprado' : '')
+        : `Comprado: ${owned}`;
       return `
-        <div class="vd-shop-item ${affordable ? '' : 'is-disabled'}" data-item="${item.id}">
-          <img class="vd-shop-glyph" src="${getShopGlyph(item.id)}" alt="" />
+        <div class="vd-shop-item ${disabled ? 'is-disabled' : ''}" data-item="${item.id}">
+          <img class="vd-shop-glyph" src="${item.iconUrl ?? getShopGlyph(item.id)}" alt="" />
           <div class="vd-shop-name">${item.name}</div>
           <div class="vd-shop-cost"><img class="vd-shop-coinico" src="${getGlyph('coin')}" alt="" /> ${item.cost}</div>
-          <div class="vd-shop-owned">Comprado: ${this.getOwned(item.id)}</div>
+          <div class="vd-shop-owned">${ownedLabel}</div>
         </div>
       `;
     }).join('');

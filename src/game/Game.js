@@ -16,6 +16,7 @@ import { CHARACTERS } from '../content/characters/Characters.js';
 import { MAPS } from '../content/maps/index.js';
 import { buildViewmodel, disposeViewmodel } from '../engine/Viewmodels.js';
 import { Shop } from '../ui/Shop.js';
+import { getIcon } from '../ui/Icons.js';
 import { MageController } from './combat/MageController.js';
 import { BALANCE } from '../core/config/GameBalance.js';
 
@@ -25,6 +26,12 @@ export class Game {
     this.character = options.character ?? CHARACTERS[0];
     this.map = options.map ?? MAPS[0];
     this.onExit = options.onExit ?? null;
+    // 'waves' (pick character + map) or 'campaign' (story rules in BALANCE.campaign).
+    this.mode = options.mode ?? 'waves';
+    this.campaign = options.campaign ?? null;
+    this.isCampaign = this.mode === 'campaign';
+    this.waveCount = this.isCampaign ? BALANCE.campaign.waveCount : BALANCE.progression.waveCount;
+    this.headshotDamageMult = this.isCampaign ? BALANCE.campaign.headshotDamageMult : 1;
 
     // All host I/O is provided by the injected platform (renderer, loop, clock,
     // viewport, input, audio). The game core never touches the browser directly.
@@ -42,7 +49,10 @@ export class Game {
     this.aerialCamera.up.set(0, 0, -1); // north stays up in the top-down view
     this.effects = new Effects(this.scene);
     this.effects.camera = this.camera; // for camera-facing slash marks
-    this.inventory = new Inventory(this.character);
+    this.inventory = new Inventory(
+      this.character,
+      this.isCampaign ? { startWeapons: BALANCE.campaign.startWeapons } : {},
+    );
     this.world = new World({
       ...BALANCE.world,
       ...(this.map.dimensions ?? {}),
@@ -71,6 +81,11 @@ export class Game {
           if (hit.killed) {
             this.effects.explosion(hit.point);
             this.audio.explosion();
+          }
+          // Campaign: a killing headshot on a ground mob pays bonus coins.
+          if (this.isCampaign && hit.headshot && hit.killed && !hit.dragon) {
+            this.coins += BALANCE.campaign.headshotBonusCoins;
+            if (hit.point) this.hud.showMessage('¡Headshot! +' + BALANCE.campaign.headshotBonusCoins + ' 🪙', 700);
           }
         },
         onProjectileImpact: (hit) => {
@@ -112,9 +127,10 @@ export class Game {
       attackCooldown: BALANCE.zombies.attackCooldown,
       spawnRadiusMin: BALANCE.zombies.spawnRadiusMin,
       spawnRadiusMax: BALANCE.zombies.spawnRadiusMax,
+      headshotDamageMult: this.headshotDamageMult,
     });
-    this.skeletons = new SkeletonManager(this.scene, { bounds, world: this.world, ...BALANCE.skeletons });
-    this.witches = new WitchManager(this.scene, { bounds, world: this.world, ...BALANCE.witches });
+    this.skeletons = new SkeletonManager(this.scene, { bounds, world: this.world, ...BALANCE.skeletons, headshotDamageMult: this.headshotDamageMult });
+    this.witches = new WitchManager(this.scene, { bounds, world: this.world, ...BALANCE.witches, headshotDamageMult: this.headshotDamageMult });
 
     // The uniform enemy contract (see enemies/EnemyAggregator.js): weapons and
     // the mage act on every enemy type through this single object.
@@ -284,9 +300,11 @@ export class Game {
   startNextWave() {
     this.wave += 1;
 
-    // The shop opens once, right before the configured wave, and that is also
-    // where you are handed reserve ammo for the guns.
-    if (this.wave === BALANCE.progression.shopWave && !this.shopDone) {
+    // Waves mode: the shop opens once before the configured wave, handing over
+    // reserve ammo. Campaign: it opens before every Nth wave (you buy weapons).
+    if (this.isCampaign) {
+      if (this.wave % BALANCE.campaign.shopEvery === 0) this.openShop(); // before waves 5,10,15,20
+    } else if (this.wave === BALANCE.progression.shopWave && !this.shopDone) {
       this.grantWaveAmmo();
       this.grantWaveBombs();
       this.openShop();
@@ -544,7 +562,7 @@ export class Game {
     // goes straight to victory (no next wave to count down to).
     if (!this.victory && this.state === 'playing') {
       if (this.enemies.aliveCount() === 0) {
-        if (this.wave >= BALANCE.progression.waveCount) {
+        if (this.wave >= this.waveCount) {
           this.advanceWave();
         } else {
           if (this.waveCountdown == null) this.waveCountdown = this.waveCountdownTotal;
@@ -660,7 +678,7 @@ export class Game {
       revive: this.hasRevive,
       guard: this.player.guardActive,
       wave: this.wave,
-      waveCount: BALANCE.progression.waveCount,
+      waveCount: this.waveCount,
       fps: this.fps,
       countdown: this.waveCountdown,
       inventory: this.inventory.snapshot(),
@@ -675,7 +693,7 @@ export class Game {
   }
 
   advanceWave() {
-    if (this.wave >= BALANCE.progression.waveCount) {
+    if (this.wave >= this.waveCount) {
       this.triggerVictory();
       return;
     }
@@ -735,12 +753,42 @@ export class Game {
     this.state = 'shop';
     this.input.exitPointerLock();
     this.shop = new Shop(this.root, {
-      items: BALANCE.shop.items,
+      title: `Tienda · Oleada ${this.wave}`,
+      items: this.buildShopItems(),
       getCoins: () => this.coins,
-      getOwned: (id) => this.buffs[id] ?? 0,
-      onBuy: (item) => this.buyBuff(item),
+      getOwned: (id) => this.shopOwned(id),
+      onBuy: (item) => this.buyShopItem(item),
       onClose: () => this.closeShop(),
     });
+  }
+
+  // Buffs (both modes) plus, in campaign, the wave-mode guns (bought once).
+  buildShopItems() {
+    const buffs = BALANCE.shop.items.map((item) => ({ ...item, kind: 'buff' }));
+    if (!this.isCampaign) return buffs;
+    const icons = { rifle: 'rifle-bullet', shotgun: 'shotgun-shell', blaster: 'blue-laser' };
+    const weapons = BALANCE.campaign.shopWeapons.map((w) => ({
+      ...w, kind: 'weapon', max: 1, iconUrl: getIcon(icons[w.id]),
+    }));
+    return [...weapons, ...buffs];
+  }
+
+  shopOwned(id) {
+    if (this.inventory.hasWeapon?.(id)) return 1;
+    return this.buffs[id] ?? 0;
+  }
+
+  buyShopItem(item) {
+    if (this.coins < item.cost) return false;
+    if (item.kind === 'weapon') {
+      if (this.inventory.hasWeapon(item.id)) return false;
+      this.coins -= item.cost;
+      this.inventory.unlockWeapon(item.id);
+      const ammo = BALANCE.campaign.weaponAmmo[item.name];
+      if (ammo) this.weapons.addAmmo(item.name, ammo);
+      return true;
+    }
+    return this.buyBuff(item);
   }
 
   closeShop() {

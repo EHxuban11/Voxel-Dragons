@@ -46,6 +46,7 @@ export class WitchManager {
     this.bounds = { ...DEFAULT_BOUNDS, ...(options.bounds ?? {}) };
     this.health = options.health ?? 26;
     this.speed = options.speed ?? 3.0;
+    this.headshotDamageMult = options.headshotDamageMult ?? 1; // >1 in campaign
     this.keepMin = options.keepMin ?? 12; // a bit more than the skeleton (9)
     this.keepMax = options.keepMax ?? 19;
     this.throwRange = options.throwRange ?? 22;
@@ -103,6 +104,7 @@ export class WitchManager {
     const head = new THREE.Mesh(this.geometry.head, this.material.skin);
     head.position.y = 1.6;
     head.castShadow = true;
+    head.userData.isHead = true; // headshot hitbox
     witch.add(head);
     const nose = new THREE.Mesh(this.geometry.nose, this.material.skin);
     nose.position.set(0, 1.52, 0.42); // faces +Z (toward the player)
@@ -289,12 +291,13 @@ export class WitchManager {
     const root = hits[0].object.userData.witchRoot;
     const witch = this.witches.find((c) => c.mesh === root);
     if (!witch || witch.dead) return null;
-    return { witch, point: hits[0].point.clone(), distance: hits[0].distance };
+    return { witch, point: hits[0].point.clone(), distance: hits[0].distance, head: Boolean(hits[0].object.userData.isHead) };
   }
 
   applyRayHit(peek, damage) {
-    const killed = this.damageWitch(peek.witch, damage);
-    return { dragon: null, witch: peek.witch, point: peek.point, distance: peek.distance, killed, health: peek.witch.health };
+    const dmg = peek.head ? damage * this.headshotDamageMult : damage;
+    const killed = this.damageWitch(peek.witch, dmg);
+    return { dragon: null, witch: peek.witch, point: peek.point, distance: peek.distance, killed, health: peek.witch.health, headshot: Boolean(peek.head) };
   }
 
   hitByRay(ray, damage = 25) {
@@ -318,8 +321,9 @@ export class WitchManager {
       const witch = this.witches.find((c) => c.mesh === root);
       if (!witch || witch.dead || seen.has(witch.id)) continue;
       seen.add(witch.id);
-      const killed = this.damageWitch(witch, damage);
-      results.push({ dragon: null, witch, point: intersection.point.clone(), distance: intersection.distance, killed, health: witch.health });
+      const head = Boolean(intersection.object.userData.isHead);
+      const killed = this.damageWitch(witch, head ? damage * this.headshotDamageMult : damage);
+      results.push({ dragon: null, witch, point: intersection.point.clone(), distance: intersection.distance, killed, health: witch.health, headshot: head });
     }
     return results;
   }

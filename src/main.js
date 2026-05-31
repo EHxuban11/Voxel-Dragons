@@ -1,43 +1,52 @@
 import './styles.css';
 import { Game } from './game/Game.js';
 import { Menu } from './ui/Menu.js';
-import { CHARACTERS } from './content/characters/Characters.js';
-import { MAPS } from './content/maps/index.js';
+import { ModeMenu } from './ui/ModeMenu.js';
+import { CampaignMenu } from './ui/CampaignMenu.js';
+import { CHARACTERS, getCharacter } from './content/characters/Characters.js';
+import { MAPS, getMap } from './content/maps/index.js';
+import { CAMPAIGNS } from './content/campaigns/index.js';
 import { createWebPlatform } from './platform/web/createWebPlatform.js';
-import { importMinecraftMap } from './content/maps/custom/importer.js';
 
 const root = document.querySelector('#app');
 
-let currentGame = null;
-
-// Composition root: the only place that knows the concrete host. It builds the
-// browser platform and injects it into the game; a fresh platform is created
-// per run and torn down when the game disposes (on return to the menu).
-function startGame(character, map) {
+// Composition root: builds a fresh browser platform per run and injects it into
+// the game; returns to the mode menu on exit.
+function launch(options) {
   const platform = createWebPlatform({ root });
-  currentGame = new Game(root, { platform, character, map, onExit: showMenu });
-  currentGame.start();
-  return currentGame;
+  const game = new Game(root, { platform, onExit: showModeMenu, ...options });
+  game.start();
 }
 
-function showMenu() {
-  const menu = new Menu(root, CHARACTERS, MAPS, (character, map) => {
-    menu.hide();
-    startGame(character, map);
+function showModeMenu() {
+  const menu = new ModeMenu(root, {
+    onWaves: () => { menu.hide(); showWavesMenu(); },
+    onCampaign: () => { menu.hide(); showCampaignMenu(); },
   });
 }
 
-showMenu();
-
-// Dev-only hook for the screenshot/verification harness (tools/shot.mjs). Guarded
-// by import.meta.env.DEV so it is stripped from production builds. Mirrors the
-// profileBridge dev-only convention.
-if (import.meta.env.DEV) {
-  window.__voxel = {
-    CHARACTERS,
-    MAPS,
-    importMinecraftMap,
-    startGame,
-    get game() { return currentGame; },
-  };
+function showWavesMenu() {
+  const menu = new Menu(root, CHARACTERS, MAPS, (character, map) => {
+    menu.hide();
+    launch({ character, map, mode: 'waves' });
+  });
 }
+
+function showCampaignMenu() {
+  const menu = new CampaignMenu(
+    root,
+    CAMPAIGNS,
+    (campaign) => {
+      menu.hide();
+      launch({
+        character: getCharacter(campaign.character),
+        map: getMap(campaign.map),
+        mode: 'campaign',
+        campaign,
+      });
+    },
+    () => { menu.hide(); showModeMenu(); },
+  );
+}
+
+showModeMenu();

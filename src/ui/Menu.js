@@ -3,7 +3,7 @@ import { getCharacterSprite, getMapSprite } from './Sprites.js';
 
 const STYLE_ID = 'voxel-dragons-menu-style';
 
-function injectStyles() {
+export function injectStyles() {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = STYLE_ID;

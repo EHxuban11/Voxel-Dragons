@@ -47,6 +47,7 @@ export class SkeletonManager {
     this.bounds = { ...DEFAULT_BOUNDS, ...(options.bounds ?? {}) };
     this.health = options.health ?? 22;
     this.speed = options.speed ?? 3.0;
+    this.headshotDamageMult = options.headshotDamageMult ?? 1; // >1 in campaign
     this.shootRange = options.shootRange ?? 18;
     this.keepMin = options.keepMin ?? 9; // retreat if the player is closer than this
     this.keepMax = options.keepMax ?? 15; // follow if the player is farther than this
@@ -87,6 +88,7 @@ export class SkeletonManager {
     const head = new THREE.Mesh(this.geometry.head, this.material.bone);
     head.position.y = 1.5;
     head.castShadow = true;
+    head.userData.isHead = true; // headshot hitbox
     skeleton.add(head);
 
     const armL = new THREE.Mesh(this.geometry.arm, this.material.bone);
@@ -320,12 +322,13 @@ export class SkeletonManager {
     const root = hits[0].object.userData.skeletonRoot;
     const skeleton = this.skeletons.find((c) => c.mesh === root);
     if (!skeleton || skeleton.dead) return null;
-    return { skeleton, point: hits[0].point.clone(), distance: hits[0].distance };
+    return { skeleton, point: hits[0].point.clone(), distance: hits[0].distance, head: Boolean(hits[0].object.userData.isHead) };
   }
 
   applyRayHit(peek, damage) {
-    const killed = this.damageSkeleton(peek.skeleton, damage);
-    return { dragon: null, zombie: null, skeleton: peek.skeleton, point: peek.point, distance: peek.distance, killed, health: peek.skeleton.health };
+    const dmg = peek.head ? damage * this.headshotDamageMult : damage;
+    const killed = this.damageSkeleton(peek.skeleton, dmg);
+    return { dragon: null, zombie: null, skeleton: peek.skeleton, point: peek.point, distance: peek.distance, killed, health: peek.skeleton.health, headshot: Boolean(peek.head) };
   }
 
   hitByRay(ray, damage = 25) {
@@ -357,8 +360,9 @@ export class SkeletonManager {
       const skeleton = this.skeletons.find((c) => c.mesh === root);
       if (!skeleton || skeleton.dead || seen.has(skeleton.id)) continue;
       seen.add(skeleton.id);
-      const killed = this.damageSkeleton(skeleton, damage);
-      results.push({ dragon: null, zombie: null, skeleton, point: intersection.point.clone(), distance: intersection.distance, killed, health: skeleton.health });
+      const head = Boolean(intersection.object.userData.isHead);
+      const killed = this.damageSkeleton(skeleton, head ? damage * this.headshotDamageMult : damage);
+      results.push({ dragon: null, zombie: null, skeleton, point: intersection.point.clone(), distance: intersection.distance, killed, health: skeleton.health, headshot: head });
     }
     return results;
   }

@@ -421,6 +421,7 @@ export class Weapons {
       damage: weapon.damage,
       killed: Boolean(hit.killed),
       health: hit.health,
+      headshot: Boolean(hit.headshot),
       direction: direction.clone(),
       origin: origin.clone(),
       context,
