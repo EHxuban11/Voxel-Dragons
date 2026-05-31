@@ -154,6 +154,12 @@ export class Game {
     this.swordCharging = false;
     this.swordCharge = 0;
     this.viewmodel = null;
+    // First-person viewmodel animation state (recoil on fire, swing on melee).
+    // Each is a 1 -> 0 timer; the offset is applied relative to the model's rest pose.
+    this.vmRecoil = 0;
+    this.vmRecoilScale = 1;
+    this.vmSwing = 0;
+    this.vmSwingScale = 1;
 
     // Hunter hotbar abilities.
     this.bombs = [];
@@ -534,6 +540,7 @@ export class Game {
       this.handlePlayerDeath();
     }
 
+    this.updateViewmodelAnim(delta);
     this.updateTargetOutline();
     this.effects.applyCameraShake(this.camera);
     this.applyVisualMutes();
@@ -720,7 +727,45 @@ export class Game {
     });
     if (fired) {
       this.audio.shoot(this.weapons.getCurrentWeaponName());
+      const id = this.weapons.currentWeapon?.id;
+      const kick = id === 'shotgun' ? 1.5 : id === 'blaster' ? 1.6 : id === 'pistol' ? 0.8 : id === 'dagger' ? 0.7 : 1;
+      this.triggerRecoil(kick);
     }
+  }
+
+  // --- viewmodel animation (recoil / swing) ---------------------------------
+  triggerRecoil(scale = 1) { this.vmRecoil = 1; this.vmRecoilScale = scale; }
+  triggerSwing(scale = 1) { this.vmSwing = 1; this.vmSwingScale = scale; }
+
+  // Applies the active recoil/swing as an offset from the viewmodel's rest pose.
+  updateViewmodelAnim(delta) {
+    const vm = this.viewmodel;
+    const rest = vm?.userData.rest;
+    if (!vm || !rest) return;
+
+    if (this.vmRecoil > 0) this.vmRecoil = Math.max(0, this.vmRecoil - delta / 0.12);
+    if (this.vmSwing > 0) this.vmSwing = Math.max(0, this.vmSwing - delta / 0.24);
+
+    let px = rest.px; let py = rest.py; let pz = rest.pz;
+    let rx = rest.rx; let ry = rest.ry; let rz = rest.rz;
+
+    if (this.vmRecoil > 0) {
+      const k = this.vmRecoil * this.vmRecoilScale; // snappy: peaks instantly, decays
+      pz += k * 0.12;  // kick straight back toward the camera
+      py += k * 0.03;  // slight muzzle rise
+      rx -= k * 0.22;  // tip up
+    }
+    if (this.vmSwing > 0) {
+      const s = this.vmSwingScale;
+      const env = Math.sin((1 - this.vmSwing) * Math.PI); // 0 -> 1 -> 0, out and back
+      rz += -env * 1.2 * s;  // diagonal roll across the screen
+      rx += env * 0.5 * s;   // chop down
+      px += -env * 0.12 * s; // sweep to the left
+      pz += -env * 0.2 * s;  // lunge forward
+    }
+
+    vm.position.set(px, py, pz);
+    vm.rotation.set(rx, ry, rz);
   }
 
   applyMeleeHits(groundHits, dragonHits, color = 0xffffff, sizeMult = 1) {
@@ -742,6 +787,7 @@ export class Game {
 
   meleeAttack() {
     if (this.meleeCooldown > 0) return;
+    this.triggerSwing();
 
     const katana = this.character.loadout === 'katana';
     const buffed = katana && this.samuraiBuffActive;
@@ -844,6 +890,7 @@ export class Game {
   }
 
   samuraiDash(charge) {
+    this.triggerSwing(1.3);
     const k = BALANCE.katana;
     const t = Math.min(charge / k.dashMaxCharge, 1);
     const length = THREE.MathUtils.lerp(k.dashMinLength, k.dashMaxLength, t);
@@ -889,6 +936,7 @@ export class Game {
   }
 
   giantSweep() {
+    this.triggerSwing(1.4);
     const origin = this.getCameraWorldPosition();
     const direction = this.getLookDirection();
     const { sweepRange, sweepArcCos, sweepDamageMult } = BALANCE.sword;
@@ -910,6 +958,7 @@ export class Game {
   }
 
   circularAoe() {
+    this.triggerSwing(1.5);
     const origin = this.getCameraWorldPosition();
     const direction = this.getLookDirection();
     const { aoeRadius, aoeDamageMult } = BALANCE.sword;
@@ -993,6 +1042,8 @@ export class Game {
       disposeViewmodel(this.viewmodel);
       this.viewmodel = null;
     }
+    this.vmRecoil = 0; // don't carry an animation onto the newly-equipped model
+    this.vmSwing = 0;
 
     const slot = this.inventory.selectedSlot;
     let kind = null;
@@ -1010,6 +1061,11 @@ export class Game {
 
     const model = kind ? buildViewmodel(kind) : null;
     if (model) {
+      // Remember the rest pose so the recoil/swing animation can offset from it.
+      model.userData.rest = {
+        px: model.position.x, py: model.position.y, pz: model.position.z,
+        rx: model.rotation.x, ry: model.rotation.y, rz: model.rotation.z,
+      };
       this.camera.add(model);
       this.viewmodel = model;
     }
