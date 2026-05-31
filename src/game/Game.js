@@ -8,6 +8,7 @@ import { SkeletonManager } from './enemies/SkeletonManager.js';
 import { WitchManager } from './enemies/WitchManager.js';
 import { createEnemyAggregator } from './enemies/EnemyAggregator.js';
 import { Profiler, profilerEnabledByDefault } from '../dev/Profiler.js';
+import { installProfileExporter } from '../dev/profileExporter.js';
 import { HUD } from '../ui/HUD.js';
 import { Effects } from '../engine/Effects.js';
 import { Inventory } from './Inventory.js';
@@ -129,8 +130,21 @@ export class Game {
     this.witches.healTargetProvider = (pos) => this.findHealTarget(pos);
 
     this.hud = new HUD(this.root);
-    // Per-frame profiler (off unless ?profile / F3 / persisted). See dev/Profiler.
+    // Per-frame profiler (off unless ?profile / L / persisted). See dev/Profiler.
     this.profiler = new Profiler({ enabled: profilerEnabledByDefault() });
+    // While the overlay is on, stream snapshots to the dev server (profiling/)
+    // so they can be analyzed from a conversation. See dev/profileExporter.
+    this._uninstallExporter = installProfileExporter(this.profiler, () => ({
+      map: this.map.id,
+      character: this.character.id,
+      wave: this.wave,
+      enemies: {
+        dragons: this.dragons.getAliveCount(),
+        zombies: this.zombies.getAliveCount(),
+        skeletons: this.skeletons.getAliveCount(),
+        witches: this.witches.getAliveCount(),
+      },
+    }));
     this.started = false;
     this.state = 'playing'; // 'playing' | 'shop' | 'dead'
     this.wave = 0;
@@ -1249,6 +1263,7 @@ export class Game {
 
   dispose() {
     this.platform.loop.stop();
+    this._uninstallExporter?.();
     this.profiler.dispose?.();
     this.hud.destroy?.();
     this.shop?.hide?.();
