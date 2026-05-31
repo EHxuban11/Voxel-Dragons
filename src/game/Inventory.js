@@ -19,7 +19,10 @@ function buildSlots(character) {
     return [{ ...SWORD_SLOT }];
   }
   if (character?.loadout === 'katana') {
-    return [{ ...KATANA_SLOT }];
+    return [
+      { ...KATANA_SLOT },
+      { kind: 'ability', abilityId: 'samuraiSpecial', label: 'Técnica', count: null, color: '#b33636', icon: 'slash' },
+    ];
   }
   if (character?.loadout === 'dagger') {
     return [

@@ -40,6 +40,31 @@ function anchor(group, x, y, z) {
   return group;
 }
 
+// A blocky Minecraft-style arm/fist gripping the weapon, added to every
+// viewmodel so each character is visibly holding their gear. Sleeve tinted
+// per character.
+function addArm(group, { skin = 0xe7b48a, sleeve = 0x6d6d6d } = {}) {
+  const arm = new THREE.Group();
+
+  const hand = box(0.17, 0.16, 0.2, skin, { roughness: 0.95, metalness: 0 });
+  hand.position.set(0, 0, 0.02);
+  arm.add(hand);
+
+  const forearm = box(0.16, 0.16, 0.42, skin, { roughness: 0.95, metalness: 0 });
+  forearm.position.set(0, -0.02, 0.32);
+  arm.add(forearm);
+
+  const cuff = box(0.2, 0.2, 0.14, sleeve, { roughness: 0.9, metalness: 0.1 });
+  cuff.position.set(0, -0.03, 0.54);
+  arm.add(cuff);
+
+  arm.position.set(0.0, -0.08, 0.14);
+  arm.rotation.set(0.5, -0.12, 0.05);
+  arm.traverse((child) => { child.frustumCulled = false; });
+  group.add(arm);
+  return arm;
+}
+
 export function buildDagger() {
   const g = new THREE.Group();
 
@@ -278,18 +303,22 @@ export function buildBlaster() {
   return anchor(g, 0.34, -0.3, -0.72);
 }
 
-export function buildViewmodel(kind) {
+export function buildViewmodel(kind, opts = {}) {
+  let model = null;
   switch (kind) {
-    case 'rifle': return buildRifle();
-    case 'shotgun': return buildShotgun();
-    case 'blaster': return buildBlaster();
-    case 'pistol': return buildPistol();
-    case 'dagger': return buildDagger();
-    case 'sword': return buildSword();
-    case 'katana': return buildKatana(false);
-    case 'katana-drawn': return buildKatana(true);
+    case 'rifle': model = buildRifle(); break;
+    case 'shotgun': model = buildShotgun(); break;
+    case 'blaster': model = buildBlaster(); break;
+    case 'pistol': model = buildPistol(); break;
+    case 'dagger': model = buildDagger(); break;
+    case 'sword': model = buildSword(); break;
+    case 'katana': model = buildKatana(false); break;
+    case 'katana-drawn': model = buildKatana(true); break;
     default: return null;
   }
+  // Every character grips their weapon with a blocky arm.
+  if (model) addArm(model, { sleeve: opts.sleeve });
+  return model;
 }
 
 export function disposeViewmodel(group) {

@@ -77,7 +77,8 @@ export class Game {
           if (hit.point) this.effects.impact(hit.point, hit.weapon?.flashColor ?? 0xcfd6df);
         },
         onBeam: (beam) => {
-          this.effects.beam(beam.origin, beam.end, beam.color);
+          // The blaster's penetrating laser is the only beam emitter.
+          this.effects.beam(beam.origin, beam.end, beam.color, { mega: true });
         },
         onTracer: (tracer) => {
           this.effects.tracer(tracer.origin, tracer.end, tracer.color);
@@ -154,12 +155,19 @@ export class Game {
     this.swordCharging = false;
     this.swordCharge = 0;
     this.viewmodel = null;
-    // First-person viewmodel animation state (recoil on fire, swing on melee).
-    // Each is a 1 -> 0 timer; the offset is applied relative to the model's rest pose.
-    this.vmRecoil = 0;
-    this.vmRecoilScale = 1;
-    this.vmSwing = 0;
-    this.vmSwingScale = 1;
+    this.viewmodelBasePos = new THREE.Vector3();
+    this.viewmodelBaseRot = new THREE.Vector3();
+    // Recoil: a transient pitch kick + viewmodel kickback that springs back each
+    // frame so it never permanently drifts the aim. Swing: a one-shot melee arc.
+    this.recoil = { pitch: 0, kickZ: 0, roll: 0 };
+    this._recoilAppliedPitch = 0;
+    this.swing = { active: false, time: 0, duration: 0.32, amount: 0, style: 'slash' };
+    // Blaster charge-up: zoom in + blue tint, then snap back and fire the laser.
+    this.blasterCharging = false;
+    this.blasterChargeTime = 0;
+    this.blasterChargeDuration = 0.45;
+    this.blasterFovBase = this.camera.fov;
+    this.blasterFovZoom = 46;
 
     // Hunter hotbar abilities.
     this.bombs = [];
@@ -184,6 +192,13 @@ export class Game {
     this.samuraiDashCharge = 0;
     this.samuraiAwaitRelease = false;
     this.altPrevHeld = false;
+    // Samurai second-ability + drawn-dash cooldowns and the travelling X cuts.
+    this.knockbackCd = 0;
+    this.xSlashCd = 0;
+    this.samuraiDashCd = 0;
+    this.samuraiSlashes = [];
+    this.timeSlowTimer = 0;
+    this.timeSlowFactor = 0.35;
 
     // Mage spells.
     this.mage = this.character.loadout === 'spells'
@@ -197,6 +212,9 @@ export class Game {
     this.shopDone = false;
     this.victory = false;
     this.deathTimer = 0;
+    // 5s visible countdown between waves (skipped when P force-advances).
+    this.waveCountdown = null;
+    this.waveCountdownTotal = 5;
 
     // The player cannot leave the map (invisible barrier at the edges).
     this.playerBounds = {
@@ -345,11 +363,13 @@ export class Game {
     const p = this.profiler;
     p.beginFrame();
     const rawDelta = this.clock.getDelta();
-    const delta = Math.min(rawDelta, 0.05);
+    let delta = Math.min(rawDelta, 0.05);
     if (rawDelta > 0) {
       const instant = 1 / rawDelta;
       this.fps = this.fps ? this.fps + (instant - this.fps) * 0.1 : instant; // smoothed
     }
+    // The samurai's drawn technique briefly slows gameplay for drama.
+    if (this.timeSlowTimer > 0) delta *= this.timeSlowFactor;
 
     // Dev-only spectator: a fixed camera for screenshots (set via the __voxel
     // debug hook). Freezes gameplay, keeps water animating, and just renders.
@@ -419,6 +439,9 @@ export class Game {
     this.guardCooldown = Math.max(0, this.guardCooldown - delta);
     this.dashCooldown = Math.max(0, this.dashCooldown - delta);
     this.aerialCooldown = Math.max(0, this.aerialCooldown - delta);
+    this.knockbackCd = Math.max(0, this.knockbackCd - delta);
+    this.xSlashCd = Math.max(0, this.xSlashCd - delta);
+    this.samuraiDashCd = Math.max(0, this.samuraiDashCd - delta);
     this.player.updateGuard(delta);
     this.updateSamuraiState(delta);
 
@@ -460,12 +483,19 @@ export class Game {
         this.zombies.clearZombies();
         this.skeletons.clearSkeletons();
         this.witches.clearWitches();
+        this.waveCountdown = null; // P skips the countdown
+        this.advanceWave();
       }
     }
 
     p.begin('player');
+    this.undoRecoil(); // strip last frame's recoil tilt before mouse-look
     this.player.update(delta, this.input, this.world);
     this.clampPlayerToBounds();
+    this.animateViewmodel(delta);
+    if (this.character.loadout === 'guns') this.updateBlasterCharge(delta);
+    else if (this.character.ability === 'samurai') this.updateTimeSlow(rawDelta);
+    this.updateSamuraiSlashes(delta);
     p.end();
     p.begin('world');
     this.world.update(delta);
@@ -495,8 +525,23 @@ export class Game {
       + this.skeletons.consumeKills() * BALANCE.coins.skeleton
       + this.witches.consumeKills() * BALANCE.coins.witch;
 
-    if (!this.victory && this.enemies.aliveCount() === 0) {
-      this.advanceWave();
+    // Between waves: a visible 5s countdown, then the next wave. The final wave
+    // goes straight to victory (no next wave to count down to).
+    if (!this.victory && this.state === 'playing') {
+      if (this.enemies.aliveCount() === 0) {
+        if (this.wave >= BALANCE.progression.waveCount) {
+          this.advanceWave();
+        } else {
+          if (this.waveCountdown == null) this.waveCountdown = this.waveCountdownTotal;
+          this.waveCountdown -= delta;
+          if (this.waveCountdown <= 0) {
+            this.waveCountdown = null;
+            this.advanceWave();
+          }
+        }
+      } else {
+        this.waveCountdown = null;
+      }
     }
     p.end();
     p.begin('weapons');
@@ -540,7 +585,6 @@ export class Game {
       this.handlePlayerDeath();
     }
 
-    this.updateViewmodelAnim(delta);
     this.updateTargetOutline();
     this.effects.applyCameraShake(this.camera);
     this.applyVisualMutes();
@@ -602,6 +646,7 @@ export class Game {
       wave: this.wave,
       waveCount: BALANCE.progression.waveCount,
       fps: this.fps,
+      countdown: this.waveCountdown,
       inventory: this.inventory.snapshot(),
       locked: this.input.pointerLocked
     });
@@ -655,6 +700,7 @@ export class Game {
   }
 
   triggerGameOver() {
+    this.cancelBlasterCharge();
     this.state = 'dead';
     this.deathTimer = 3;
     this.hud.showDeathScreen();
@@ -669,6 +715,7 @@ export class Game {
   }
 
   openShop() {
+    this.cancelBlasterCharge();
     this.state = 'shop';
     this.input.exitPointerLock();
     this.shop = new Shop(this.root, {
@@ -718,6 +765,11 @@ export class Game {
   }
 
   handleFire() {
+    // The blaster doesn't fire instantly: it charges (zoom + blue tint) first.
+    if (this.weapons.currentWeapon?.id === 'blaster') {
+      this.startBlasterCharge();
+      return;
+    }
     const fired = this.weapons.fire({
       scene: this.scene,
       world: this.world,
@@ -726,46 +778,156 @@ export class Game {
       camera: this.camera
     });
     if (fired) {
+      this.addRecoil(this.weapons.currentWeapon?.id);
       this.audio.shoot(this.weapons.getCurrentWeaponName());
-      const id = this.weapons.currentWeapon?.id;
-      const kick = id === 'shotgun' ? 1.5 : id === 'blaster' ? 1.6 : id === 'pistol' ? 0.8 : id === 'dagger' ? 0.7 : 1;
-      this.triggerRecoil(kick);
     }
   }
 
   // --- viewmodel animation (recoil / swing) ---------------------------------
-  triggerRecoil(scale = 1) { this.vmRecoil = 1; this.vmRecoilScale = scale; }
-  triggerSwing(scale = 1) { this.vmSwing = 1; this.vmSwingScale = scale; }
+  addRecoil(weaponId) {
+    const presets = {
+      rifle: { pitch: 0.013, kickZ: 0.05, roll: 0.012 },
+      shotgun: { pitch: 0.055, kickZ: 0.16, roll: 0.03 },
+      blaster: { pitch: 0.07, kickZ: 0.22, roll: 0 },
+      pistol: { pitch: 0.022, kickZ: 0.06, roll: 0.016 },
+      dagger: { pitch: 0.012, kickZ: 0.04, roll: 0.02 },
+    };
+    const pre = presets[weaponId] ?? presets.rifle;
+    this.recoil.pitch += pre.pitch;
+    this.recoil.kickZ += pre.kickZ;
+    this.recoil.roll += (Math.random() - 0.5) * 2 * pre.roll;
+  }
 
-  // Applies the active recoil/swing as an offset from the viewmodel's rest pose.
-  updateViewmodelAnim(delta) {
-    const vm = this.viewmodel;
-    const rest = vm?.userData.rest;
-    if (!vm || !rest) return;
+  triggerSwing(amount = 1, style = 'slash') {
+    this.swing.active = true;
+    this.swing.time = 0;
+    this.swing.amount = amount;
+    this.swing.style = style;
+    this.swing.duration = style === 'power' ? 0.5 : 0.32;
+  }
 
-    if (this.vmRecoil > 0) this.vmRecoil = Math.max(0, this.vmRecoil - delta / 0.12);
-    if (this.vmSwing > 0) this.vmSwing = Math.max(0, this.vmSwing - delta / 0.24);
-
-    let px = rest.px; let py = rest.py; let pz = rest.pz;
-    let rx = rest.rx; let ry = rest.ry; let rz = rest.rz;
-
-    if (this.vmRecoil > 0) {
-      const k = this.vmRecoil * this.vmRecoilScale; // snappy: peaks instantly, decays
-      pz += k * 0.12;  // kick straight back toward the camera
-      py += k * 0.03;  // slight muzzle rise
-      rx -= k * 0.22;  // tip up
+  undoRecoil() {
+    if (this._recoilAppliedPitch) {
+      this.player.pitchHolder.rotation.x -= this._recoilAppliedPitch;
+      this._recoilAppliedPitch = 0;
     }
-    if (this.vmSwing > 0) {
-      const s = this.vmSwingScale;
-      const env = Math.sin((1 - this.vmSwing) * Math.PI); // 0 -> 1 -> 0, out and back
-      rz += -env * 1.2 * s;  // diagonal roll across the screen
-      rx += env * 0.5 * s;   // chop down
-      px += -env * 0.12 * s; // sweep to the left
-      pz += -env * 0.2 * s;  // lunge forward
+  }
+
+  // Recoil springs back to rest, the melee swing arcs once, and the result is
+  // composed onto the viewmodel's recorded rest pose.
+  animateViewmodel(delta) {
+    this.recoil.pitch *= Math.exp(-13 * delta);
+    this.recoil.kickZ *= Math.exp(-11 * delta);
+    this.recoil.roll *= Math.exp(-13 * delta);
+    if (this.recoil.pitch < 0.0003) this.recoil.pitch = 0;
+    if (Math.abs(this.recoil.kickZ) < 0.001) this.recoil.kickZ = 0;
+    if (Math.abs(this.recoil.roll) < 0.0003) this.recoil.roll = 0;
+
+    // Negative pitch tilts the view up (the recoil kick).
+    this._recoilAppliedPitch = -this.recoil.pitch;
+    this.player.pitchHolder.rotation.x += this._recoilAppliedPitch;
+
+    if (this.swing.active) {
+      this.swing.time += delta;
+      if (this.swing.time >= this.swing.duration) this.swing.active = false;
+    }
+
+    const vm = this.viewmodel;
+    if (!vm) return;
+
+    let px = this.viewmodelBasePos.x;
+    let py = this.viewmodelBasePos.y;
+    let pz = this.viewmodelBasePos.z + this.recoil.kickZ;
+    let rx = this.viewmodelBaseRot.x + this.recoil.pitch * 1.6;
+    let ry = this.viewmodelBaseRot.y;
+    let rz = this.viewmodelBaseRot.z + this.recoil.roll;
+
+    if (this.swing.active) {
+      const t = Math.min(this.swing.time / this.swing.duration, 1);
+      const a = this.swing.amount;
+      if (this.swing.style === 'power') {
+        // Knockback technique: wind right + back (charge), then drive left.
+        if (t < 0.4) {
+          const w = t / 0.4;
+          ry += -1.0 * w * a;
+          pz += 0.18 * w * a;
+          rz += -0.35 * w * a;
+        } else {
+          const s = (t - 0.4) / 0.6;
+          const arc = Math.sin(s * Math.PI / 2);
+          ry += (-1.0 + 3.0 * arc) * a;
+          pz += (0.18 - 0.45 * arc) * a;
+          px += -0.28 * arc * a;
+          rz += (-0.35 + 0.8 * arc) * a;
+        }
+      } else {
+        // Basic horizontal slash: right -> left -> back to rest (mostly yaw).
+        const arc = Math.sin(t * Math.PI);
+        ry += 1.8 * arc * a;
+        px += -0.22 * arc * a;
+        rz += 0.45 * arc * a;
+        rx += 0.12 * arc * a;
+        pz += -0.1 * arc * a;
+      }
     }
 
     vm.position.set(px, py, pz);
     vm.rotation.set(rx, ry, rz);
+  }
+
+  // --- blaster charge-up ----------------------------------------------------
+  startBlasterCharge() {
+    if (this.blasterCharging) return;
+    const weapon = this.weapons.currentWeapon;
+    if (!weapon || weapon.cooldownRemaining > 0 || weapon.isReloading) return;
+    if (weapon.ammo <= 0) {
+      this.weapons.fire({ scene: this.scene, world: this.world, dragons: this.enemyTargets, camera: this.camera });
+      return;
+    }
+    this.blasterCharging = true;
+    this.blasterChargeTime = 0;
+    this.audio.reload(); // charging whirr stand-in
+  }
+
+  updateBlasterCharge(delta) {
+    if (this.blasterCharging && this.weapons.currentWeapon?.id !== 'blaster') {
+      this.cancelBlasterCharge();
+    }
+    if (!this.blasterCharging) {
+      if (Math.abs(this.camera.fov - this.blasterFovBase) > 0.05) {
+        this.camera.fov += (this.blasterFovBase - this.camera.fov) * Math.min(1, delta * 16);
+        this.camera.updateProjectionMatrix();
+      }
+      return;
+    }
+    this.blasterChargeTime += delta;
+    const t = Math.min(this.blasterChargeTime / this.blasterChargeDuration, 1);
+    this.camera.fov = THREE.MathUtils.lerp(this.blasterFovBase, this.blasterFovZoom, t * t);
+    this.camera.updateProjectionMatrix();
+    this.hud.setTint(t * 0.55);
+    if (t >= 1) this.fireBlaster();
+  }
+
+  fireBlaster() {
+    this.blasterCharging = false;
+    this.blasterChargeTime = 0;
+    this.hud.setTint(0);
+    const fired = this.weapons.fire({
+      scene: this.scene, world: this.world, dragons: this.enemyTargets, effects: this.effects, camera: this.camera,
+    });
+    if (fired) {
+      this.addRecoil('blaster');
+      this.audio.shoot('Blaster');
+    }
+  }
+
+  cancelBlasterCharge() {
+    if (!this.blasterCharging) return;
+    this.blasterCharging = false;
+    this.blasterChargeTime = 0;
+    this.hud.setTint(0);
+    this.camera.fov = this.blasterFovBase;
+    this.camera.updateProjectionMatrix();
   }
 
   applyMeleeHits(groundHits, dragonHits, color = 0xffffff, sizeMult = 1) {
@@ -834,35 +996,150 @@ export class Game {
     }
   }
 
-  handleSamuraiSecondary(delta) {
+  handleSamuraiSecondary() {
     const altHeld = this.input.pointerLocked && (this.input.isDown('Mouse2') || this.input.isDown('KeyF'));
     const altPressed = altHeld && !this.altPrevHeld;
-    const altReleased = !altHeld && this.altPrevHeld;
 
     if (!this.samuraiBuffActive) {
-      if (altPressed) {
-        this.samuraiParry(); // opens the window; the buff only triggers if hit
-        this.samuraiAwaitRelease = true;
-      }
-    } else if (this.samuraiAwaitRelease) {
-      if (altReleased) this.samuraiAwaitRelease = false;
-    } else if (altHeld) {
-      this.samuraiDashCharging = true;
-      this.samuraiDashCharge = Math.min(this.samuraiDashCharge + delta, BALANCE.katana.dashMaxCharge);
-      // At max charge it fires whether or not the button is still held.
-      if (this.samuraiDashCharge >= BALANCE.katana.dashMaxCharge) {
-        this.samuraiDash(this.samuraiDashCharge);
-        this.samuraiDashCharging = false;
-        this.samuraiDashCharge = 0;
-        this.samuraiAwaitRelease = true;
-      }
-    } else if (this.samuraiDashCharging) {
-      this.samuraiDash(this.samuraiDashCharge);
-      this.samuraiDashCharging = false;
-      this.samuraiDashCharge = 0;
+      // Sheathed: parry to unsheathe (the buff triggers if an attack lands).
+      if (altPressed) this.samuraiParry();
+    } else if (altPressed && this.samuraiDashCd <= 0) {
+      // Drawn: instant full-power dash on a 3s cooldown; stays unsheathed.
+      this.samuraiDashMax();
+      this.samuraiDashCd = 3;
     }
 
     this.altPrevHeld = altHeld;
+  }
+
+  // Full-power dash (no charging) that does NOT consume the unsheathe buff.
+  samuraiDashMax() {
+    this.triggerSwing(1.3);
+    const k = BALANCE.katana;
+    const length = k.dashMaxLength;
+    const halfWidth = k.dashMaxWidth / 2;
+    const damage = k.dashMaxDamage;
+
+    const origin = this.player.object.position.clone();
+    const forward = this.getForwardHorizontal();
+    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+
+    this.player.lastMoveDir.copy(forward);
+    this.player.startDash(length, k.dashSpeed);
+    this.enemies.hitBox(origin, forward, right, length, halfWidth, damage);
+
+    const slashes = Math.round(length * 4);
+    for (let i = 0; i < slashes; i += 1) {
+      const along = (i / slashes) * length + (Math.random() - 0.5);
+      const side = (Math.random() - 0.5) * 2 * halfWidth;
+      const pos = origin.clone().addScaledVector(forward, Math.max(0, along)).addScaledVector(right, side);
+      pos.y += 0.6 + Math.random() * 1.8;
+      this.effects.slashMark(pos, 1.4 + Math.random() * 0.9, 0xffffff);
+    }
+    this.audio.explosion();
+  }
+
+  // The samurai's second ability (Técnica slot): knockback strike when sheathed,
+  // or the time-slow X cuts when drawn.
+  samuraiSpecial() {
+    if (this.samuraiBuffActive) this.samuraiXSlash();
+    else this.samuraiKnockbackStrike();
+  }
+
+  // Sheathed: a heavy frontal blow that knocks enemies back. Low damage (just
+  // enough to kill skeletons). 6s cooldown.
+  samuraiKnockbackStrike() {
+    if (this.knockbackCd > 0) return;
+    this.knockbackCd = 6;
+    this.triggerSwing(1.2, 'power'); // wind up right-and-back, then strike left
+
+    const origin = this.getCameraWorldPosition();
+    const direction = this.getLookDirection();
+    const range = 6;
+    const damage = 24; // kills skeletons (22), not zombies (30) or witches (26)
+    const groundHits = [
+      ...this.zombies.hitMelee(origin, direction, range, damage, 0.1),
+      ...this.skeletons.hitMelee(origin, direction, range, damage, 0.1),
+      ...this.witches.hitMelee(origin, direction, range, damage, 0.1),
+    ];
+    const dragonHits = this.dragons.hitMelee(origin, direction, range, damage, 0.1);
+    this.applyMeleeHits(groundHits, dragonHits, 0xffd166, 1.3);
+
+    const center = this.player.object.position.clone();
+    this.enemies.knockback(center, range, 5);
+    this.effects.shockwave(center, range, 0xffd166);
+    this.audio.explosion();
+  }
+
+  // Drawn: 0.3s time-slow (blue + zoom), then two forward-travelling X cuts.
+  // High damage, 30s cooldown, and it re-sheathes you.
+  samuraiXSlash() {
+    if (this.xSlashCd > 0) return;
+    this.xSlashCd = 30;
+    this.samuraiBuffActive = false; // re-sheathe
+    this.samuraiBuffTimer = 0;
+    this.updateViewmodel();
+    this.timeSlowTimer = 0.3;
+    this.spawnXSlash();
+    this.audio.explosion();
+  }
+
+  spawnXSlash() {
+    const forward = this.getForwardHorizontal();
+    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+    const group = new THREE.Group();
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xbfe0ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(1, 7), material);
+      bar.rotation.z = angle;
+      group.add(bar);
+    }
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), forward);
+    const start = this.player.object.position.clone().addScaledVector(forward, 1.5);
+    start.y = this.player.object.position.y + 1.4;
+    group.position.copy(start);
+    group.frustumCulled = false;
+    this.scene.add(group);
+
+    this.samuraiSlashes.push({ group, forward, right, position: start.clone(), speed: 3, traveled: 0, maxTravel: 16, damage: 200 });
+  }
+
+  updateSamuraiSlashes(delta) {
+    for (let i = this.samuraiSlashes.length - 1; i >= 0; i -= 1) {
+      const s = this.samuraiSlashes[i];
+      const step = s.speed * delta;
+      s.position.addScaledVector(s.forward, step);
+      s.traveled += step;
+      s.group.position.copy(s.position);
+
+      const hits = this.enemies.hitBox(s.position, s.forward, s.right, 1, 2.5, s.damage);
+      for (const hit of hits) this.effects.slashMark(hit.position, 2.2, 0xbfe0ff);
+
+      if (s.traveled >= s.maxTravel) {
+        this.scene.remove(s.group);
+        s.group.traverse((c) => { c.geometry?.dispose?.(); if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose?.()); else c.material?.dispose?.(); });
+        this.samuraiSlashes.splice(i, 1);
+      }
+    }
+  }
+
+  updateTimeSlow(rawDelta) {
+    if (this.timeSlowTimer <= 0) return;
+    this.timeSlowTimer -= rawDelta;
+    const p = THREE.MathUtils.clamp(1 - this.timeSlowTimer / 0.3, 0, 1);
+    const wave = Math.sin(p * Math.PI); // 0 -> 1 -> 0: zoom/tint in then out
+    this.camera.fov = THREE.MathUtils.lerp(this.blasterFovBase, 52, wave);
+    this.camera.updateProjectionMatrix();
+    this.hud.setTint(0.4 * wave);
+    if (this.timeSlowTimer <= 0) {
+      this.timeSlowTimer = 0;
+      this.camera.fov = this.blasterFovBase;
+      this.camera.updateProjectionMatrix();
+      this.hud.setTint(0);
+    }
   }
 
   // Opens the parry window. No buff yet — an enemy must connect within it.
@@ -1042,9 +1319,6 @@ export class Game {
       disposeViewmodel(this.viewmodel);
       this.viewmodel = null;
     }
-    this.vmRecoil = 0; // don't carry an animation onto the newly-equipped model
-    this.vmSwing = 0;
-
     const slot = this.inventory.selectedSlot;
     let kind = null;
     if (slot?.kind === 'melee') {
@@ -1057,17 +1331,19 @@ export class Game {
       else if (label.includes('blaster')) kind = 'blaster';
       else if (label.includes('pistola')) kind = 'pistol';
       else if (label.includes('daga')) kind = 'dagger';
+    } else if (slot?.kind === 'ability') {
+      // The samurai holds the katana for the Técnica slot too.
+      if (slot.abilityId === 'samuraiSpecial') kind = this.samuraiBuffActive ? 'katana-drawn' : 'katana';
     }
 
-    const model = kind ? buildViewmodel(kind) : null;
+    const sleeveByLoadout = { guns: 0xffd166, sword: 0x9aa6b2, dagger: 0x3f6b3a, katana: 0xb33636, spells: 0x6a3fb5 };
+    const model = kind ? buildViewmodel(kind, { sleeve: sleeveByLoadout[this.character.loadout] ?? 0x6d6d6d }) : null;
     if (model) {
-      // Remember the rest pose so the recoil/swing animation can offset from it.
-      model.userData.rest = {
-        px: model.position.x, py: model.position.y, pz: model.position.z,
-        rx: model.rotation.x, ry: model.rotation.y, rz: model.rotation.z,
-      };
       this.camera.add(model);
       this.viewmodel = model;
+      // Record the rest pose so recoil/swing offsets are relative to it.
+      this.viewmodelBasePos.copy(model.position);
+      this.viewmodelBaseRot.set(model.rotation.x, model.rotation.y, model.rotation.z);
     }
   }
 
@@ -1101,6 +1377,8 @@ export class Game {
       }
     } else if (slot.abilityId === 'aerial') {
       this.activateAerial();
+    } else if (slot.abilityId === 'samuraiSpecial') {
+      this.samuraiSpecial();
     } else if (this.mage && BALANCE.mage.skills[slot.abilityId]) {
       this.mage.tryCast(slot.abilityId);
     }
@@ -1264,6 +1542,7 @@ export class Game {
   }
 
   respawnPlayer() {
+    this.cancelBlasterCharge();
     this.player.revive();
     this.player.setPosition(...this.world.getSpawnPoint().toArray());
     this.samuraiBuffActive = false;
@@ -1378,6 +1657,8 @@ export class Game {
     this.mage?.dispose?.();
     for (const bomb of this.bombs) this.scene.remove(bomb.mesh);
     this.bombs.length = 0;
+    for (const s of this.samuraiSlashes) this.scene.remove(s.group);
+    this.samuraiSlashes.length = 0;
     this.dragons.dispose?.();
     this.zombies.dispose?.();
     this.skeletons.dispose?.();
