@@ -307,6 +307,15 @@ function injectStyles() {
       opacity: 1;
     }
 
+    .vd-whiteout {
+      position: absolute;
+      inset: 0;
+      z-index: 55;
+      background: #ffffff;
+      opacity: 0;
+      pointer-events: none;
+    }
+
     .vd-vignette {
       position: absolute;
       inset: 0;
@@ -704,6 +713,7 @@ export class HUD {
     this.root.setAttribute('aria-hidden', 'true');
     this.root.innerHTML = `
       <div class="vd-vignette"></div>
+      <div class="vd-whiteout" data-hud="whiteout"></div>
       <div class="vd-tint" data-hud="tint"></div>
       <div class="vd-crosshair"></div>
       <img class="vd-guard vd-glyph" data-hud="guard" src="${getGlyph('shield')}" alt="guardia" />
@@ -736,6 +746,7 @@ export class HUD {
 
     this.nodes = {
       vignette: this.root.querySelector('.vd-vignette'),
+      whiteout: this.root.querySelector('[data-hud="whiteout"]'),
       tint: this.root.querySelector('[data-hud="tint"]'),
       countdown: this.root.querySelector('[data-hud="countdown"]'),
       guard: this.root.querySelector('[data-hud="guard"]'),
@@ -889,6 +900,18 @@ export class HUD {
     this.damageTimeout = window.setTimeout(() => {
       this.nodes.vignette.classList.remove('is-active');
     }, 90);
+  }
+
+  // Full-screen white flash that fades over `ms` (hides the meteor map swap).
+  whiteout(ms = 900) {
+    const el = this.nodes.whiteout;
+    if (!el) return;
+    el.style.transition = 'none';
+    el.style.opacity = '1';
+    window.requestAnimationFrame(() => {
+      el.style.transition = `opacity ${ms}ms ease-out`;
+      el.style.opacity = '0';
+    });
   }
 
   destroy() {

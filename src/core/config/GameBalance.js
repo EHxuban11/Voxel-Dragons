@@ -347,6 +347,16 @@ export const BALANCE = deepFreeze({
     attackEvery: [1.6, 2.6], // random gap (min,max) between attack patterns
   },
 
+  // Wave-10 cutscene (waves mode only): a meteor smashes the castle into a
+  // crater, then the player respawns somewhere random on the cratered map.
+  meteor: {
+    wave: 10,
+    height: 95,       // meteor start altitude
+    fallTime: 1.8,    // seconds to impact
+    flashTime: 0.9,   // white-out duration that hides the map swap
+    craterRadius: 18, // covers the castle + plateau
+  },
+
   shop: {
     items: [
       { id: 'damage', name: '+25% Daño', emoji: '⚔️', cost: 18 },

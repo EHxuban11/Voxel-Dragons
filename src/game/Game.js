@@ -47,6 +47,7 @@ export class Game {
     this.activeCamera = this.camera;
     this.aerialCamera = new THREE.PerspectiveCamera(60, viewport.width / viewport.height, 0.1, 900);
     this.aerialCamera.up.set(0, 0, -1); // north stays up in the top-down view
+    this.cineCamera = new THREE.PerspectiveCamera(74, viewport.width / viewport.height, 0.1, 900);
     this.effects = new Effects(this.scene);
     this.effects.camera = this.camera; // for camera-facing slash marks
     this.inventory = new Inventory(
@@ -310,9 +311,19 @@ export class Game {
       this.openShop();
     }
 
-    // Lots of zombies (increasing), fewer skeletons, fewer witches, fewest dragons.
-    // Waves mode wave 5: the red miniboss appears and the rest of the wave is lighter.
-    const w = this.wave;
+    // Waves mode wave 10: the meteor cutscene plays first; enemies spawn when it
+    // ends (after the map has become a crater and the player has respawned).
+    if (!this.isCampaign && this.wave === BALANCE.meteor.wave) {
+      this.startMeteorCinematic();
+      return;
+    }
+
+    this.spawnWaveEnemies(this.wave);
+  }
+
+  spawnWaveEnemies(w) {
+    // Lots of zombies (increasing), fewer skeletons/witches, fewest dragons.
+    // Waves mode wave 5: the red miniboss appears and the rest is lighter.
     const bossWave = !this.isCampaign && w === BALANCE.boss.wave;
     const scale = bossWave ? BALANCE.boss.enemyScale : 1;
     this.zombies.spawnWave(Math.ceil((2 + w) * scale), this.player, this.world);
@@ -324,8 +335,85 @@ export class Game {
       this.hud.showMessage('☠ MINIBOSS: Dragón Rojo', 2600);
     } else {
       this.dragons.spawnWave(Math.max(1, Math.ceil(w * 0.3)));
-      this.hud.showMessage(`Oleada ${this.wave}`, 1500);
+      this.hud.showMessage(`Oleada ${w}`, 1500);
     }
+  }
+
+  // --- wave-10 meteor cutscene ----------------------------------------------
+  startMeteorCinematic() {
+    this.state = 'cinematic';
+    this.cancelBlasterCharge?.();
+    const cfg = BALANCE.meteor;
+    // The castle sits at the map centre; its gate faces +Z. Park a dedicated
+    // cinematic camera outside the gate, looking back at the castle, so the
+    // meteor streaks down into frame and explodes on it. Switching the active
+    // camera (rather than moving the player rig) keeps the player untouched
+    // for the random respawn afterwards.
+    const top = (this.world.options.waterLevel ?? 7) + 4; // ~castle wall height
+    this.meteorTarget = new THREE.Vector3(0, top, 0);
+    this.cineCamera.aspect = this.camera.aspect;
+    this.cineCamera.position.set(2, top + 7, 44);
+    this.cineCamera.up.set(0, 1, 0);
+    this.cineCamera.lookAt(0, top + 1, 0);
+    this.cineCamera.updateProjectionMatrix();
+    this.cineCamera.updateMatrixWorld(true);
+    this.activeCamera = this.cineCamera;
+
+    const mesh = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(3.4, 0),
+      new THREE.MeshStandardMaterial({ color: 0x3a2a22, emissive: 0xff5a18, emissiveIntensity: 1.4, flatShading: true }),
+    );
+    mesh.position.set(0, cfg.height, 0);
+    this.scene.add(mesh);
+    this.meteor = { mesh, phase: 'fall', t: 0, start: mesh.position.clone(), target: this.meteorTarget.clone(), trail: 0 };
+    this.hud.showMessage('☄ ¡METEORITO!', 1600);
+  }
+
+  updateMeteor(delta) {
+    const m = this.meteor;
+    if (!m) return;
+    const cfg = BALANCE.meteor;
+    if (m.phase === 'fall') {
+      m.t += delta;
+      const k = Math.min(1, m.t / cfg.fallTime);
+      m.mesh.position.lerpVectors(m.start, m.target, k * k); // accelerate downward
+      m.mesh.rotation.x += delta * 4;
+      m.mesh.rotation.z += delta * 3;
+      m.trail -= delta;
+      if (m.trail <= 0) { m.trail = 0.04; this.effects.impact(m.mesh.position, 0xff7a1a); }
+      this.effects._addShake(0.02 + k * k * 0.12, 0.12);
+      if (k >= 1) this.meteorImpact();
+    } else if (m.phase === 'flash') {
+      m.t += delta;
+      if (m.t >= cfg.flashTime) this.endMeteorCinematic();
+    }
+  }
+
+  meteorImpact() {
+    const m = this.meteor;
+    this.effects.bigFlash(m.target.clone());
+    this.effects.explosion(m.target.clone());
+    this.audio.explosion();
+    this.hud.whiteout(BALANCE.meteor.flashTime * 1000);
+    // Swap the map: the castle becomes a crater (hidden by the white-out).
+    this.world.carveCrater(0, 0, BALANCE.meteor.craterRadius);
+    this.scene.remove(m.mesh);
+    m.mesh.geometry.dispose();
+    m.mesh.material.dispose();
+    m.mesh = null;
+    m.phase = 'flash';
+    m.t = 0;
+  }
+
+  endMeteorCinematic() {
+    this.meteor = null;
+    this.activeCamera = this.camera; // back to the first-person view
+    // Drop the player somewhere random on the new cratered map.
+    const spawn = this.world.getRandomSpawnPoint();
+    this.player.setPosition(spawn.x, spawn.y, spawn.z);
+    this.player.velocity.set(0, 0, 0);
+    this.state = 'playing';
+    this.spawnWaveEnemies(this.wave);
   }
 
   setupScene() {
@@ -440,6 +528,19 @@ export class Game {
     // Shop is open: the run is paused while buffs are purchased.
     if (this.state === 'shop') {
       this.renderer.render(this.scene, this.camera);
+      this.input.update();
+      return;
+    }
+
+    // Meteor cutscene: the player is frozen while the meteor falls, the map turns
+    // into a crater, then play resumes (handled inside updateMeteor).
+    if (this.state === 'cinematic') {
+      this.updateMeteor(delta);
+      this.world.update(delta);
+      this.effects.update(delta);
+      this.effects.applyCameraShake(this.activeCamera);
+      this.renderHud();
+      this.renderer.render(this.scene, this.activeCamera);
       this.input.update();
       return;
     }

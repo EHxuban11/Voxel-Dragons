@@ -458,6 +458,51 @@ export class World extends THREE.Group {
     return this.getBlock(x, this.options.waterLevel, z) === 'water';
   }
 
+  // Carves a bowl-shaped crater centered at (cx,cz): clears each column and
+  // refills up to a floor that dips toward the centre. Used by the wave-10
+  // meteor cutscene to replace the castle with a crater. Rebuilds the meshes.
+  carveCrater(cx, cz, radius) {
+    const rim = this.options.waterLevel + 2;             // matches the old plateau top
+    const floorMin = Math.max(1, this.options.waterLevel - 4); // deep centre
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      for (let dz = -radius; dz <= radius; dz += 1) {
+        const d = Math.hypot(dx, dz);
+        if (d > radius) continue;
+        const x = cx + dx;
+        const z = cz + dz;
+        this.clearColumn(x, z);
+        const t = d / radius; // 0 centre .. 1 edge
+        const floor = Math.round(lerp(floorMin, rim, t * t)); // quadratic bowl
+        for (let y = 0; y <= floor; y += 1) {
+          let type = 'stone';
+          if (y === floor) type = t > 0.9 ? 'grass' : 'stone'; // scorched inside, grass rim
+          else if (y >= floor - 2 && t > 0.85) type = 'dirt';
+          this.setBlock(x, y, z, type, false);
+        }
+      }
+    }
+    this.rebuildMeshes();
+  }
+
+  // A walkable spawn at a random column (used to drop the player somewhere new
+  // after the meteor). Falls back to the deterministic spawn if none is found.
+  getRandomSpawnPoint() {
+    const { width, depth, waterLevel } = this.options;
+    const halfW = Math.floor(width / 2) - 2;
+    const halfD = Math.floor(depth / 2) - 2;
+    const walkable = (type) => Boolean(type) && type !== 'water'
+      && type !== 'leaves' && type !== 'spruce_leaves' && type !== 'wood' && type !== 'spruce_log';
+    for (let tries = 0; tries < 80; tries += 1) {
+      const x = Math.floor((Math.random() * 2 - 1) * halfW);
+      const z = Math.floor((Math.random() * 2 - 1) * halfD);
+      const y = this.getSurfaceY(x, z);
+      if (y !== null && y >= waterLevel && walkable(this.getBlock(x, y, z))) {
+        return new THREE.Vector3(x + 0.5, y + 2.2, z + 0.5);
+      }
+    }
+    return this.getSpawnPoint();
+  }
+
   rebuildMeshes() {
     this.clearMeshes();
 

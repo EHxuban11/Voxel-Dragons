@@ -125,6 +125,17 @@ export class Effects {
     this._addShake(0.28, 0.42);
   }
 
+  // A giant white blast for the meteor impact: huge expanding white spheres + a
+  // bright light. (The full-screen white flash is the HUD's whiteout.)
+  bigFlash(position, radius = 44, ttl = 0.95) {
+    if (!this.scene) return;
+    const pos = resolvePosition(position);
+    this._spawnExpandingSphere(pos, 0xffffff, 0.5, radius, ttl);
+    this._spawnExpandingSphere(pos, 0xfff2c0, 0.3, radius * 0.6, ttl * 0.7);
+    this._addLight(pos, 0xffffff, 30, radius * 1.6, ttl);
+    this._addShake(0.6, ttl);
+  }
+
   tracer(start, end, color = 0xffe08a, speed = 110, radius = 0.08) {
     if (!this.scene) return;
 
