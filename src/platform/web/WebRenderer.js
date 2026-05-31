@@ -14,6 +14,10 @@ export class WebRenderer {
   setSize(width, height) { this.three.setSize(width, height); }
   render(scene, camera) { this.three.render(scene, camera); }
 
+  // Precompiles the shader programs for everything currently in the scene, so
+  // the first frames don't stall on GPU shader compilation. Call during init.
+  prewarm(scene, camera) { this.three.compile(scene, camera); }
+
   dispose() {
     this.three.setAnimationLoop(null);
     this.three.dispose?.();

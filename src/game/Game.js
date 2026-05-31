@@ -209,7 +209,7 @@ export class Game {
     this.setupScene();
     this.bindEvents();
     this.onSelectionChanged();
-    this.startNextWave();
+    // The first wave is spawned in start(), right after the shader pre-warm.
   }
 
   grantWaveAmmo() {
@@ -293,7 +293,28 @@ export class Game {
   }
 
   start() {
+    this.prewarmShaders();
+    this.startNextWave();
     this.platform.loop.start(() => this.tick());
+  }
+
+  // Compile every shader up front so the first rendered frames don't stall on
+  // GPU shader compilation (the ~110ms wave-1 hitch seen in profiling). We spawn
+  // one of each enemy type so all their materials compile now, precompile the
+  // whole scene, then clear the probes before the real first wave spawns. The
+  // shared per-manager materials persist, so later spawns reuse the compiled
+  // programs. (Transient effect materials are created on demand and not covered.)
+  prewarmShaders() {
+    if (!this.platform.renderer.prewarm) return;
+    this.dragons.spawnWave(1);
+    this.zombies.spawnWave(1, this.player, this.world);
+    this.skeletons.spawnWave(1, this.player, this.world);
+    this.witches.spawnWave(1, this.player, this.world);
+    this.platform.renderer.prewarm(this.scene, this.camera);
+    this.dragons.clearDragons();
+    this.zombies.clearZombies();
+    this.skeletons.clearSkeletons();
+    this.witches.clearWitches();
   }
 
   tick() {
