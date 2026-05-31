@@ -70,6 +70,7 @@ export const CHARACTERS = [
     health: 110,
     shield: 40,
     speedMult: 0.95,
+    secret: true, // hidden in the selector; unlocked by pressing Q+E together
   },
 ];
 

@@ -293,7 +293,8 @@ export class Menu {
     this.characters = characters;
     this.maps = maps ?? [];
     this.onStart = onStart;
-    this.selectedId = characters[0]?.id ?? null;
+    this.secretUnlocked = false; // secret characters (Luffy) hidden until Q+E
+    this.selectedId = this.visibleCharacters()[0]?.id ?? characters[0]?.id ?? null;
     this.selectedMapId = this.maps[0]?.id ?? null;
 
     this.root = document.createElement('div');
@@ -324,10 +325,35 @@ export class Menu {
     });
 
     this.container.appendChild(this.root);
+
+    // Secret roster: hold Q + E together in the selector to unlock Luffy.
+    this._keys = new Set();
+    this._onKeyDown = (event) => {
+      this._keys.add(event.code);
+      if (!this.secretUnlocked && this._keys.has('KeyQ') && this._keys.has('KeyE')) {
+        this.unlockSecret();
+      }
+    };
+    this._onKeyUp = (event) => this._keys.delete(event.code);
+    window.addEventListener('keydown', this._onKeyDown);
+    window.addEventListener('keyup', this._onKeyUp);
+  }
+
+  // Characters shown in the selector — secret ones only once unlocked.
+  visibleCharacters() {
+    return this.characters.filter((c) => !c.secret || this.secretUnlocked);
+  }
+
+  unlockSecret() {
+    this.secretUnlocked = true;
+    const secret = this.characters.find((c) => c.secret);
+    if (secret) this.selectedId = secret.id; // jump straight to the unlocked one
+    this.renderCharacters();
+    this.setStatus('🔓 ¡Personaje secreto desbloqueado!');
   }
 
   renderCharacters() {
-    this.charactersNode.innerHTML = this.characters.map((character) => `
+    this.charactersNode.innerHTML = this.visibleCharacters().map((character) => `
       <div class="vd-char-card ${character.id === this.selectedId ? 'is-selected' : ''}" data-char="${character.id}">
         <div class="vd-char-sprite" style="background-image:url(${getCharacterSprite(character.id)})"></div>
         <div class="vd-char-name">${character.name}</div>
@@ -396,6 +422,8 @@ export class Menu {
   }
 
   hide() {
+    window.removeEventListener('keydown', this._onKeyDown);
+    window.removeEventListener('keyup', this._onKeyUp);
     this.root.remove();
   }
 }
