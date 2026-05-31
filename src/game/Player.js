@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { moveHorizontal, easeToGround } from '../engine/Collision.js';
+
+const STEP_MAX = 1.1;       // blocks up to this height are climbable steps
+const STEP_CLIMB_SPEED = 9; // blocks/sec eased when stepping up (stair feel)
 
 const DEFAULTS = {
   height: 1.75,
@@ -147,7 +151,12 @@ export class Player {
     const nextX = pos.x + this.dashDir.x * step;
     const nextZ = pos.z + this.dashDir.z * step;
 
-    if (this.isBlockedAt(world, nextX, nextZ)) {
+    // Check the leading edge (radius ahead) so the dash stops a body-width short
+    // of the wall instead of burying the camera in it.
+    const r = this.config.radius;
+    const edgeX = nextX + this.dashDir.x * r;
+    const edgeZ = nextZ + this.dashDir.z * r;
+    if (this.isBlockedAt(world, edgeX, edgeZ)) {
       // Hit a block -> the dash stops here. Enemies are ignored (pass through).
       this.dashActive = false;
       this.dashRemaining = 0;
@@ -162,7 +171,7 @@ export class Player {
     }
 
     this.velocity.y = 0;
-    this.resolveVerticalCollision(world);
+    this.resolveVerticalCollision(world, delta);
   }
 
   isBlockedAt(world, x, z) {
@@ -295,25 +304,25 @@ export class Player {
 
     this.velocity.y -= this.config.gravity * delta;
 
-    // Walls taller than one block stop horizontal movement (a single-block
-    // step is allowed and is climbed by the vertical resolve). Per-axis so you
-    // can still slide along a wall.
+    // Horizontal: resolve against the player's radius so the body (and the
+    // first-person camera at its centre) can never enter a block. Per-axis, so
+    // you slide along walls; one-block steps are climbable (eased vertically).
     const pos = this.cameraHolder.position;
-    if (this.velocity.x !== 0 && this.isClimbBlocked(world, pos.x + this.velocity.x * delta, pos.z)) {
-      this.velocity.x = 0;
-    }
-    if (this.velocity.z !== 0 && this.isClimbBlocked(world, pos.x, pos.z + this.velocity.z * delta)) {
-      this.velocity.z = 0;
-    }
+    const blocked = moveHorizontal(
+      world, pos, this.velocity.x * delta, this.velocity.z * delta,
+      this.config.radius, this.config.height, STEP_MAX,
+    );
+    if (blocked.x) this.velocity.x = 0;
+    if (blocked.z) this.velocity.z = 0;
 
-    pos.addScaledVector(this.velocity, delta);
-
-    this.resolveVerticalCollision(world);
+    // Vertical moves on its own so the step-up easing isn't fighting gravity.
+    pos.y += this.velocity.y * delta;
+    this.resolveVerticalCollision(world, delta);
 
     this.direction.copy(FORWARD);
   }
 
-  resolveVerticalCollision(world) {
+  resolveVerticalCollision(world, dt = 0) {
     const pos = this.cameraHolder.position;
     const headHeight = this.config.height;
 
@@ -343,7 +352,14 @@ export class Player {
       }
 
       if (groundTop !== null && pos.y <= groundTop) {
-        pos.y = groundTop;
+        const rise = groundTop - pos.y;
+        // Walking onto a step (not falling): ease up gradually like stairs.
+        // Landing from a fall, or a large correction: snap.
+        if (this.velocity.y <= 0.0001 && rise <= STEP_MAX && dt > 0) {
+          pos.y += Math.min(rise, STEP_CLIMB_SPEED * dt);
+        } else {
+          pos.y = groundTop;
+        }
         this.velocity.y = Math.max(0, this.velocity.y);
         this.isGrounded = true;
       } else {

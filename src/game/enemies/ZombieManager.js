@@ -1,6 +1,9 @@
 import * as THREE from 'three';
+import { moveHorizontal, easeToGround } from '../../engine/Collision.js';
 
 const DEFAULT_BOUNDS = { minX: -22, maxX: 22, minZ: -22, maxZ: 22 };
+const ENEMY_RADIUS = 0.4;  // body half-width for wall collision
+const ENEMY_HEIGHT = 2;    // ground mobs are 2 blocks tall
 
 function getWorldPosition(target, fallback = new THREE.Vector3()) {
   if (!target) return fallback.set(0, 0, 0);
@@ -292,26 +295,16 @@ export class ZombieManager {
       }
 
       if (distance > this.attackRange) {
-        const nextX = THREE.MathUtils.clamp(
-          zombie.mesh.position.x + this.tmpDir.x * zombie.speed * speedFactor * dt,
-          this.bounds.minX,
-          this.bounds.maxX,
-        );
-        const nextZ = THREE.MathUtils.clamp(
-          zombie.mesh.position.z + this.tmpDir.z * zombie.speed * speedFactor * dt,
-          this.bounds.minZ,
-          this.bounds.maxZ,
-        );
-        // Zombies can only step up one block. A taller wall blocks them in that
-        // direction (they keep facing/trying, but can't pass).
-        const nextGround = groundHeight(world, nextX, nextZ);
-        if (nextGround - zombie.mesh.position.y <= 1.1) {
-          zombie.mesh.position.x = nextX;
-          zombie.mesh.position.z = nextZ;
-        }
+        // Per-axis collision: walls block (so they don't sink into them) but the
+        // zombie slides along them instead of jamming; one-block steps pass.
+        const speed = zombie.speed * speedFactor * dt;
+        moveHorizontal(world, zombie.mesh.position, this.tmpDir.x * speed, this.tmpDir.z * speed, ENEMY_RADIUS, ENEMY_HEIGHT);
+        zombie.mesh.position.x = THREE.MathUtils.clamp(zombie.mesh.position.x, this.bounds.minX, this.bounds.maxX);
+        zombie.mesh.position.z = THREE.MathUtils.clamp(zombie.mesh.position.z, this.bounds.minZ, this.bounds.maxZ);
       }
 
-      zombie.mesh.position.y = groundHeight(world, zombie.mesh.position.x, zombie.mesh.position.z);
+      // Smooth height change (stair-step) instead of snapping to the ground.
+      easeToGround(zombie.mesh.position, groundHeight(world, zombie.mesh.position.x, zombie.mesh.position.z), dt);
 
       // shamble bob
       zombie.mesh.children[0].rotation.z = Math.sin(this.elapsed * 6 + zombie.id) * 0.08;

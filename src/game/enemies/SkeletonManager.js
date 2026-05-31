@@ -1,7 +1,10 @@
 import * as THREE from 'three';
+import { moveHorizontal, easeToGround } from '../../engine/Collision.js';
 
 const DEFAULT_BOUNDS = { minX: -22, maxX: 22, minZ: -22, maxZ: 22 };
 const ARROW_HIT_RADIUS = 1.0;
+const ENEMY_RADIUS = 0.4;
+const ENEMY_HEIGHT = 2;
 
 function getWorldPosition(target, fallback = new THREE.Vector3()) {
   if (!target) return fallback.set(0, 0, 0);
@@ -169,15 +172,13 @@ export class SkeletonManager {
       if (move !== 0) {
         const stepX = this.tmpDir.x * skeleton.speed * speedFactor * dt * move;
         const stepZ = this.tmpDir.z * skeleton.speed * speedFactor * dt * move;
-        const nextX = THREE.MathUtils.clamp(skeleton.mesh.position.x + stepX, this.bounds.minX, this.bounds.maxX);
-        const nextZ = THREE.MathUtils.clamp(skeleton.mesh.position.z + stepZ, this.bounds.minZ, this.bounds.maxZ);
-        if (groundHeight(world, nextX, nextZ) - skeleton.mesh.position.y <= 1.1) {
-          skeleton.mesh.position.x = nextX;
-          skeleton.mesh.position.z = nextZ;
-        }
+        moveHorizontal(world, skeleton.mesh.position, stepX, stepZ, ENEMY_RADIUS, ENEMY_HEIGHT);
+        skeleton.mesh.position.x = THREE.MathUtils.clamp(skeleton.mesh.position.x, this.bounds.minX, this.bounds.maxX);
+        skeleton.mesh.position.z = THREE.MathUtils.clamp(skeleton.mesh.position.z, this.bounds.minZ, this.bounds.maxZ);
       }
 
-      skeleton.mesh.position.y = groundHeight(world, skeleton.mesh.position.x, skeleton.mesh.position.z);
+      // Smooth height change (stair-step) instead of snapping.
+      easeToGround(skeleton.mesh.position, groundHeight(world, skeleton.mesh.position.x, skeleton.mesh.position.z), dt);
 
       skeleton.shootTimer -= dt;
       if (distance <= this.shootRange && skeleton.shootTimer <= 0) {

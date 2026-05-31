@@ -1,6 +1,9 @@
 import * as THREE from 'three';
+import { moveHorizontal, easeToGround } from '../../engine/Collision.js';
 
 const DEFAULT_BOUNDS = { minX: -22, maxX: 22, minZ: -22, maxZ: 22 };
+const ENEMY_RADIUS = 0.4;
+const ENEMY_HEIGHT = 2;
 
 function getWorldPosition(target, fallback = new THREE.Vector3()) {
   if (!target) return fallback.set(0, 0, 0);
@@ -173,14 +176,14 @@ export class WitchManager {
       if (distance > this.keepMax) move = 1;
       else if (distance < this.keepMin) move = -1;
       if (move !== 0) {
-        const nextX = THREE.MathUtils.clamp(witch.mesh.position.x + this.tmpDir.x * witch.speed * speedFactor * dt * move, this.bounds.minX, this.bounds.maxX);
-        const nextZ = THREE.MathUtils.clamp(witch.mesh.position.z + this.tmpDir.z * witch.speed * speedFactor * dt * move, this.bounds.minZ, this.bounds.maxZ);
-        if (groundHeight(world, nextX, nextZ) - witch.mesh.position.y <= 1.1) {
-          witch.mesh.position.x = nextX;
-          witch.mesh.position.z = nextZ;
-        }
+        const stepX = this.tmpDir.x * witch.speed * speedFactor * dt * move;
+        const stepZ = this.tmpDir.z * witch.speed * speedFactor * dt * move;
+        moveHorizontal(world, witch.mesh.position, stepX, stepZ, ENEMY_RADIUS, ENEMY_HEIGHT);
+        witch.mesh.position.x = THREE.MathUtils.clamp(witch.mesh.position.x, this.bounds.minX, this.bounds.maxX);
+        witch.mesh.position.z = THREE.MathUtils.clamp(witch.mesh.position.z, this.bounds.minZ, this.bounds.maxZ);
       }
-      witch.mesh.position.y = groundHeight(world, witch.mesh.position.x, witch.mesh.position.z);
+      // Smooth height change (stair-step) instead of snapping.
+      easeToGround(witch.mesh.position, groundHeight(world, witch.mesh.position.x, witch.mesh.position.z), dt);
 
       witch.throwTimer -= dt;
       if (witch.throwTimer <= 0) {
