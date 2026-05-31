@@ -28,31 +28,53 @@ function ceilLog2(n) {
 // Unpacks `count` palette indices from an array of 64-bit longs (BigInt).
 // padded=false (pre-1.16) packs bits tightly across long boundaries;
 // padded=true (1.16+) keeps each long's entries from spanning into the next.
-function unpackIndices(longs, bits, count, padded) {
+export function unpackIndices(longs, bits, count, padded) {
   const out = new Uint16Array(count);
-  const mask = (1n << BigInt(bits)) - 1n;
-  const u = longs.map((v) => BigInt.asUintN(64, v)); // treat as unsigned
+  // Block-state palettes cap at 4096 entries, so bits <= 12 and the mask fits a
+  // plain 32-bit Number — no BigInt mask needed.
+  const mask = (1 << bits) - 1;
 
   if (padded) {
+    // Modern (1.16+) packing: entries never span a 64-bit boundary. Split each
+    // long into two unsigned 32-bit words ONCE (the only BigInt left, O(longs)),
+    // then resolve every entry with plain Number bit math — O(count) BigInt-free.
+    const n = longs.length;
+    const lo = new Uint32Array(n);
+    const hi = new Uint32Array(n);
+    for (let k = 0; k < n; k += 1) {
+      const u = BigInt.asUintN(64, longs[k]);
+      lo[k] = Number(u & 0xffffffffn);
+      hi[k] = Number(u >> 32n);
+    }
     const perLong = Math.floor(64 / bits);
-    const bbits = BigInt(bits);
     for (let i = 0; i < count; i += 1) {
-      const li = Math.floor(i / perLong);
-      const shift = BigInt((i % perLong) * bits);
-      out[i] = Number((u[li] >> shift) & mask);
-    }
-  } else {
-    const bbits = BigInt(bits);
-    for (let i = 0; i < count; i += 1) {
-      const bitPos = i * bits;
-      const li = bitPos >> 6;
-      const offset = BigInt(bitPos & 63);
-      let value = u[li] >> offset;
-      if (Number(offset) + bits > 64 && li + 1 < u.length) {
-        value |= u[li + 1] << (64n - offset);
+      const li = (i / perLong) | 0;
+      const shift = (i - li * perLong) * bits;
+      if (shift + bits <= 32) {
+        out[i] = (lo[li] >>> shift) & mask;
+      } else if (shift >= 32) {
+        out[i] = (hi[li] >>> (shift - 32)) & mask;
+      } else {
+        // Entry straddles the 32-bit word split inside this one long.
+        out[i] = ((lo[li] >>> shift) | (hi[li] << (32 - shift))) & mask;
       }
-      out[i] = Number(value & mask);
     }
+    return out;
+  }
+
+  // Legacy (pre-1.16) tight packing can span 64-bit boundaries; kept on BigInt
+  // for correctness — this path is only reached by very old maps.
+  const u = longs.map((v) => BigInt.asUintN(64, v));
+  const bmask = (1n << BigInt(bits)) - 1n;
+  for (let i = 0; i < count; i += 1) {
+    const bitPos = i * bits;
+    const li = bitPos >> 6;
+    const offset = BigInt(bitPos & 63);
+    let value = u[li] >> offset;
+    if ((bitPos & 63) + bits > 64 && li + 1 < u.length) {
+      value |= u[li + 1] << (64n - offset);
+    }
+    out[i] = Number(value & bmask);
   }
   return out;
 }
