@@ -227,7 +227,9 @@ export class Game {
     const { minX, maxX, minZ, maxZ } = this.playerBounds;
     const width = maxX - minX;
     const depth = maxZ - minZ;
-    const geometry = new THREE.BoxGeometry(width, 60, depth);
+    // Tall enough to wall in the full build of tall imported maps.
+    const height = Math.max(60, this.world.options.maxHeight + 12);
+    const geometry = new THREE.BoxGeometry(width, height, depth);
     const material = new THREE.MeshBasicMaterial({
       color: 0x6fc3ff,
       transparent: true,
@@ -236,7 +238,7 @@ export class Game {
       depthWrite: false,
     });
     const barrier = new THREE.Mesh(geometry, material);
-    barrier.position.set((minX + maxX) / 2, 18, (minZ + maxZ) / 2);
+    barrier.position.set((minX + maxX) / 2, height / 2 - 12, (minZ + maxZ) / 2);
     this.scene.add(barrier);
   }
 
@@ -275,10 +277,17 @@ export class Game {
     const sun = new THREE.DirectionalLight(sunCfg.color, sunCfg.intensity);
     sun.position.set(70, 120, 50);
     sun.castShadow = true;
-    sun.shadow.camera.left = -90;
-    sun.shadow.camera.right = 90;
-    sun.shadow.camera.top = 90;
-    sun.shadow.camera.bottom = -90;
+    // Cover the whole footprint with the sun's shadow frustum (custom imported
+    // maps can be far larger than the built-in ones); bump the shadow map
+    // resolution to keep shadows crisp over the bigger area.
+    const shadowHalf = Math.max(90, this.world.options.width / 2, this.world.options.depth / 2);
+    sun.shadow.camera.left = -shadowHalf;
+    sun.shadow.camera.right = shadowHalf;
+    sun.shadow.camera.top = shadowHalf;
+    sun.shadow.camera.bottom = -shadowHalf;
+    sun.shadow.camera.far = shadowHalf * 3 + 200;
+    const shadowRes = shadowHalf > 120 ? 2048 : 1024;
+    sun.shadow.mapSize.set(shadowRes, shadowRes);
     this.scene.add(sun);
   }
 
@@ -290,6 +299,15 @@ export class Game {
       this.started = true;
     });
     this.renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
+  }
+
+  // Dev-only: park a fixed camera at `pos` looking at `target` (arrays [x,y,z])
+  // and freeze gameplay, for deterministic screenshots. See the __voxel hook.
+  setSpectator(pos, target) {
+    this.started = true;
+    this._spectator = pos
+      ? { pos: new THREE.Vector3().fromArray(pos), target: new THREE.Vector3().fromArray(target ?? [0, 0, 0]) }
+      : null;
   }
 
   start() {
@@ -325,6 +343,18 @@ export class Game {
     if (rawDelta > 0) {
       const instant = 1 / rawDelta;
       this.fps = this.fps ? this.fps + (instant - this.fps) * 0.1 : instant; // smoothed
+    }
+
+    // Dev-only spectator: a fixed camera for screenshots (set via the __voxel
+    // debug hook). Freezes gameplay, keeps water animating, and just renders.
+    if (this._spectator) {
+      this.world.update(delta);
+      this.activeCamera = this.camera;
+      this.camera.position.copy(this._spectator.pos);
+      this.camera.lookAt(this._spectator.target);
+      this.renderer.render(this.scene, this.camera);
+      this.input.update();
+      return;
     }
 
     // Death screen: everything is frozen; return to the menu after 3 seconds.
