@@ -133,6 +133,35 @@ export class ZombieManager {
     }
   }
 
+  // Adds `count` zombies around the player WITHOUT clearing the existing ones
+  // (used by the Dragon King's summoning roar).
+  reinforce(count, player, world) {
+    const center = getWorldPosition(player, this.tmpPlayer);
+    const base = this.zombies.length;
+    for (let i = 0; i < count; i += 1) {
+      const id = base + i;
+      const angle = Math.random() * Math.PI * 2;
+      const radius = THREE.MathUtils.lerp(this.spawnRadiusMin, this.spawnRadiusMax, Math.random());
+      const x = THREE.MathUtils.clamp(center.x + Math.cos(angle) * radius, this.bounds.minX, this.bounds.maxX);
+      const z = THREE.MathUtils.clamp(center.z + Math.sin(angle) * radius, this.bounds.minZ, this.bounds.maxZ);
+
+      const zombie = {
+        id,
+        health: this.health,
+        maxHealth: this.health,
+        speed: this.speed * (0.85 + (id % 4) * 0.08),
+        damage: this.damage,
+        attackTimer: 0.6 + (id % 5) * 0.15,
+        mesh: this.createZombieMesh(id),
+        dead: false,
+      };
+      zombie.mesh.position.set(x, groundHeight(world, x, z), z);
+      zombie.mesh.userData.zombie = zombie;
+      this.group.add(zombie.mesh);
+      this.zombies.push(zombie);
+    }
+  }
+
   spawnTrainingGround(player, world) {
     this.clearZombies();
     const center = getWorldPosition(player, this.tmpPlayer);

@@ -331,6 +331,18 @@ export class Game {
   }
 
   spawnWaveEnemies(w) {
+    // Waves mode wave 10 (after the meteor): the Dragon King alone — no other
+    // enemies spawn, it summons its own reinforcements.
+    if (!this.isCampaign && w === BALANCE.kingDragon.wave) {
+      this.zombies.spawnWave(0, this.player, this.world);
+      this.skeletons.spawnWave(0, this.player, this.world);
+      this.witches.spawnWave(0, this.player, this.world);
+      this.dragons.spawnWave(0);
+      this.dragons.spawnKing(this.player, BALANCE.kingDragon);
+      this.hud.showMessage('👑 EL REY DRAGÓN', 3200);
+      return;
+    }
+
     // Lots of zombies (increasing), fewer skeletons/witches, fewest dragons.
     // Waves mode wave 5: the red miniboss appears and the rest is lighter.
     const bossWave = !this.isCampaign && w === BALANCE.boss.wave;
@@ -576,6 +588,7 @@ export class Game {
       this.handleSkeletonArrows();
       this.handleWitchPotions();
       this.handleDragonFireballs(delta);
+      this.handleDragonEvents();
       this.updateBombs(delta);
       this.weapons.update(delta);
       this.effects.update(delta);
@@ -735,6 +748,7 @@ export class Game {
     }
 
     this.handleDragonFireballs(delta);
+    this.handleDragonEvents();
 
     if (!this.player.isAlive) {
       this.handlePlayerDeath();
@@ -1810,6 +1824,17 @@ export class Game {
         this.hud.flashDamage();
         if (ball.kind !== 'fire') this.audio.damage();
       }
+    }
+  }
+
+  // The Dragon King's summoning roar drops reinforcements around the player.
+  handleDragonEvents() {
+    for (const event of this.dragons.consumeEvents?.() ?? []) {
+      if (event.type !== 'summon') continue;
+      this.zombies.reinforce(event.zombies ?? 0, this.player, this.world);
+      this.skeletons.reinforce(event.skeletons ?? 0, this.player, this.world);
+      this.hud.showMessage('👑 El Rey Dragón invoca esbirros', 1800);
+      this.audio.explosion?.();
     }
   }
 

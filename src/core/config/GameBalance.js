@@ -347,6 +347,32 @@ export const BALANCE = deepFreeze({
     attackEvery: [1.6, 2.6], // random gap (min,max) between attack patterns
   },
 
+  // Wave-10 boss (waves mode only): after the meteor, the Dragon King lands in
+  // the centre of the crater and never leaves it. No other enemies spawn (it
+  // summons its own). Reuses the wave-5 attacks scaled up, plus three signature
+  // attacks: erupting pillars, a fire-breath cone, and a summoning roar.
+  kingDragon: {
+    wave: 10,
+    health: 5200,
+    scale: 3.0,        // bigger than the wave-5 boss (1.9)
+    color: 0xcf1414,
+    fire: 0xff5212,
+    crown: 0xffd23b,
+    center: [0, 0],    // crater centre (x,z) — it stays here
+    altitude: 16,      // hover height above the crater
+    // Scaled-up wave-5 attacks.
+    ground: { speed: 19, damage: 16, count: 3, zoneRadius: 6.0, zoneDps: 32, zoneTtl: 5.5, tickRate: 0.5 },
+    homing: { speed: 32, damage: 14, count: 8, turn: 2.4, life: 3.2, radius: 0.95 },
+    machinegun: { speed: 50, damage: 6, burst: 34, interval: 0.05, spread: 0.06, life: 2.4, radius: 0.5 },
+    // 8 big red telegraphs on the ground, then erupting damage columns.
+    pillar: { count: 8, telegraph: 1.2, radius: 3.4, spread: 13, damage: 75, columnTtl: 0.6, columnHeight: 16 },
+    // A giant circular-sector telegraph aimed at the player, then a fire breath.
+    cone: { telegraph: 2.0, range: 26, halfAngle: 0.6, damage: 55, breathTtl: 0.7 },
+    // A roar that summons reinforcements after a short wind-up.
+    summon: { roar: 1.0, zombies: 6, skeletons: 3 },
+    attackEvery: [2.0, 3.2],
+  },
+
   // Wave-10 cutscene (waves mode only): a meteor smashes the castle into a
   // crater, then the player respawns somewhere random on the cratered map.
   meteor: {

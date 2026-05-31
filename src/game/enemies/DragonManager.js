@@ -34,6 +34,8 @@ export class DragonManager {
     this.impacts = [];
     this.bossProjectiles = []; // miniboss: ground balls, homing bolts, MG bullets
     this.fireZones = [];        // miniboss: burning ground hazards
+    this.kingEffects = [];      // king: telegraphs, erupting columns, breath, roar
+    this.events = [];           // king -> Game signals (e.g. summon reinforcements)
     this.tmpPlayerPosition = new THREE.Vector3();
     this.tmpTarget = new THREE.Vector3();
     this.tmpDirection = new THREE.Vector3();
@@ -191,12 +193,24 @@ export class DragonManager {
     for (const dragon of this.dragons) {
       this.group.remove(dragon.mesh);
       if (dragon.healthBar) this.group.remove(dragon.healthBar);
+      // A king cleared mid-telegraph: drop its in-flight phase meshes too.
+      const phase = dragon.phase;
+      if (phase?.zones) for (const z of phase.zones) { this.group.remove(z.mesh); z.mesh.geometry.dispose?.(); }
+      if (phase?.mesh) { this.group.remove(phase.mesh); phase.mesh.geometry.dispose?.(); }
     }
     this.dragons.length = 0;
     for (const p of this.bossProjectiles) this.group.remove(p.mesh);
     for (const z of this.fireZones) { this.group.remove(z.mesh); z.mesh.geometry.dispose?.(); z.material.dispose?.(); }
+    this._clearKingEffects();
     this.bossProjectiles.length = 0;
     this.fireZones.length = 0;
+    this.events.length = 0;
+  }
+
+  // Disposes any live king columns / breath / roar visuals.
+  _clearKingEffects() {
+    for (const e of this.kingEffects) { this.group.remove(e.mesh); e.geometry?.dispose?.(); e.material?.dispose?.(); }
+    this.kingEffects.length = 0;
   }
 
   spawnWave(count) {
@@ -204,15 +218,20 @@ export class DragonManager {
     this.spawnDragons(Math.max(0, Math.floor(count)));
   }
 
-  // Wave-5 miniboss: one big red dragon with far more HP that cycles attacks.
-  spawnBoss(player, config) {
-    this.bossConfig = config;
+  // Projectile/telegraph materials shared by both the wave-5 boss and the king.
+  _ensureBossMaterials(fire = 0xff3a10) {
     this.material.bossBall = this.material.bossBall
-      || new THREE.MeshStandardMaterial({ color: config.fire, emissive: config.fire, emissiveIntensity: 1.6, roughness: 0.5, flatShading: true });
+      || new THREE.MeshStandardMaterial({ color: fire, emissive: fire, emissiveIntensity: 1.6, roughness: 0.5, flatShading: true });
     this.material.bossBolt = this.material.bossBolt
       || new THREE.MeshStandardMaterial({ color: 0xff7a2a, emissive: 0xff5a10, emissiveIntensity: 1.8, roughness: 0.5, flatShading: true });
     this.material.bossBullet = this.material.bossBullet
       || new THREE.MeshBasicMaterial({ color: 0xffd060 });
+  }
+
+  // Wave-5 miniboss: one big red dragon with far more HP that cycles attacks.
+  spawnBoss(player, config) {
+    this.bossConfig = config;
+    this._ensureBossMaterials(config.fire);
 
     const center = getWorldPosition(player, this.tmpPlayerPosition);
     const boss = {
@@ -258,6 +277,293 @@ export class DragonManager {
       child.userData.dragonRoot = mesh; // keep the raycast root tag after cloning
     });
     return mesh;
+  }
+
+  // Wave-10 boss: the Dragon King. Far more HP than the wave-5 boss, bigger,
+  // crowned, and bolted to the centre of the crater (it never moves).
+  spawnKing(player, config) {
+    this.kingConfig = config;
+    this.bossConfig = config; // _bossGround/spawnFireZone read shared cfg fields too
+    this._ensureBossMaterials(config.fire);
+    this.material.kingTelegraph = this.material.kingTelegraph
+      || new THREE.MeshBasicMaterial({ color: 0xff2a14, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
+    this.material.kingColumn = this.material.kingColumn
+      || new THREE.MeshBasicMaterial({ color: 0xff7320, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending });
+    this.material.kingCrown = this.material.kingCrown
+      || new THREE.MeshStandardMaterial({ color: config.crown ?? 0xffd23b, emissive: 0xffae12, emissiveIntensity: 0.7, roughness: 0.35, metalness: 0.4, flatShading: true });
+
+    const [cx, cz] = config.center ?? [0, 0];
+    const king = {
+      id: this.dragons.length,
+      king: true,
+      health: config.health,
+      maxHealth: config.health,
+      aggression: 0.8,
+      angle: Math.PI, // face roughly toward the player's likely approach
+      altitude: config.altitude ?? 16,
+      stationaryCenter: new THREE.Vector3(cx, 0, cz),
+      orbitRadius: 0,
+      radiusAmplitude: 0,
+      radiusRate: 0,
+      radiusPhase: 0,
+      speed: 0, // pinned to the crater centre
+      attackTimer: 2.5,
+      lastAttack: null,
+      burst: null,
+      phase: null,
+      mesh: this.createKingMesh(config),
+      healthBar: this.createHealthBar(),
+      velocity: new THREE.Vector3(),
+      dead: false,
+    };
+    king.mesh.position.set(cx, king.altitude, cz);
+    king.mesh.userData.dragon = king;
+    king.healthBar.scale.setScalar(1.7); // a bigger bar for the bigger boss
+    this.group.add(king.mesh);
+    this.group.add(king.healthBar);
+    this.dragons.push(king);
+    return king;
+  }
+
+  createKingMesh(config) {
+    const mesh = this.createDragonMesh(this.dragons.length);
+    mesh.scale.setScalar(config.scale ?? 3.0);
+    mesh.traverse((child) => {
+      if (!child.isMesh || !child.material) return;
+      const m = child.material.clone();
+      if (m.color) m.color.setHex(config.color ?? 0xcf1414);
+      if (m.emissive) { m.emissive.setHex(config.fire ?? 0xff5212); m.emissiveIntensity = 0.7; }
+      child.material = m;
+      child.userData.dragonRoot = mesh;
+    });
+    // A golden crown sitting on the skull (parented to the head so it tracks).
+    const head = mesh.getObjectByName('head');
+    if (head) {
+      const crown = new THREE.Group();
+      crown.position.set(0.5, 1.05, 0);
+      const band = this._box(1.15, 0.32, 1.15, this.material.kingCrown, false);
+      crown.add(band);
+      for (let i = 0; i < 6; i += 1) {
+        const a = (i / 6) * Math.PI * 2;
+        const spike = this._box(0.22, 0.6, 0.22, this.material.kingCrown, false);
+        spike.position.set(Math.cos(a) * 0.42, 0.42, Math.sin(a) * 0.42);
+        crown.add(spike);
+      }
+      crown.traverse((c) => { if (c.isMesh) c.userData.dragonRoot = mesh; });
+      head.add(crown);
+    }
+    return mesh;
+  }
+
+  // --- Dragon King attack cycle ----------------------------------------------
+  updateKing(dragon, dt, player, playerPos) {
+    if (!player) return;
+    const cfg = this.kingConfig;
+
+    // A machine-gun burst in progress.
+    if (dragon.burst) {
+      dragon.burst.timer -= dt;
+      if (dragon.burst.timer <= 0) {
+        this._bossBullet(dragon, playerPos, cfg.machinegun);
+        dragon.burst.left -= 1;
+        dragon.burst.timer = cfg.machinegun.interval;
+        if (dragon.burst.left <= 0) dragon.burst = null;
+      }
+      return;
+    }
+
+    // A multi-stage attack (pillar / cone / summon) is mid-telegraph.
+    if (dragon.phase) { this._advanceKingPhase(dragon, dt, player, playerPos); return; }
+
+    dragon.attackTimer -= dt;
+    if (dragon.attackTimer > 0) return;
+
+    const choices = ['pillar', 'cone', 'summon', 'ground', 'homing', 'machinegun'].filter((a) => a !== dragon.lastAttack);
+    const attack = choices[Math.floor(Math.random() * choices.length)];
+    dragon.lastAttack = attack;
+    const [lo, hi] = cfg.attackEvery;
+    dragon.attackTimer = lo + Math.random() * (hi - lo);
+
+    if (attack === 'ground') {
+      for (let i = 0; i < cfg.ground.count; i += 1) this._bossGround(dragon, playerPos, cfg.ground, i);
+    } else if (attack === 'homing') {
+      for (let i = 0; i < cfg.homing.count; i += 1) this._bossHoming(dragon, playerPos, cfg.homing);
+    } else if (attack === 'machinegun') {
+      dragon.burst = { left: cfg.machinegun.burst, timer: 0 };
+    } else if (attack === 'pillar') {
+      this._kingStartPillar(dragon, playerPos);
+    } else if (attack === 'cone') {
+      this._kingStartCone(dragon, playerPos);
+    } else {
+      this._kingStartSummon(dragon);
+    }
+  }
+
+  _advanceKingPhase(dragon, dt, player, playerPos) {
+    const phase = dragon.phase;
+    phase.t -= dt;
+    const pulse = THREE.MathUtils.clamp(1 - phase.t / phase.total, 0, 1); // 0 -> 1 as it resolves
+
+    if (phase.type === 'pillar') {
+      for (const z of phase.zones) z.mesh.material.opacity = 0.25 + 0.5 * pulse * (0.6 + 0.4 * Math.sin(this.elapsed * 22));
+      if (phase.t <= 0) {
+        for (const z of phase.zones) {
+          this._kingEruptColumn(z, phase.cfg);
+          const hit = Math.hypot(playerPos.x - z.x, playerPos.z - z.z) <= phase.cfg.radius && Math.abs(playerPos.y - z.y) < 6;
+          this.impacts.push({ position: new THREE.Vector3(z.x, z.y + 1.5, z.z), damage: phase.cfg.damage, hitPlayer: hit, kind: 'explosion' });
+          this.group.remove(z.mesh);
+          z.mesh.geometry.dispose();
+          z.mesh.material.dispose();
+        }
+        dragon.phase = null;
+      }
+    } else if (phase.type === 'cone') {
+      phase.mesh.material.opacity = 0.22 + 0.45 * pulse * (0.6 + 0.4 * Math.sin(this.elapsed * 18));
+      if (phase.t <= 0) {
+        this._kingBreath(dragon, phase);
+        const to = this.tmpDirection.set(playerPos.x - phase.origin.x, 0, playerPos.z - phase.origin.z);
+        const dist = to.length();
+        const within = dist > 0.001 && dist <= phase.cfg.range
+          && to.normalize().dot(phase.dir) >= Math.cos(phase.cfg.halfAngle);
+        this.impacts.push({ position: playerPos.clone(), damage: phase.cfg.damage, hitPlayer: within, kind: 'fire' });
+        this.group.remove(phase.mesh);
+        phase.mesh.geometry.dispose();
+        phase.mesh.material.dispose();
+        dragon.phase = null;
+      }
+    } else if (phase.type === 'summon') {
+      if (phase.t <= 0) {
+        this.events.push({ type: 'summon', zombies: this.kingConfig.summon.zombies, skeletons: this.kingConfig.summon.skeletons });
+        dragon.phase = null;
+      }
+    }
+  }
+
+  _kingStartPillar(dragon, playerPos) {
+    const cfg = this.kingConfig.pillar;
+    const zones = [];
+    for (let i = 0; i < cfg.count; i += 1) {
+      let x; let z;
+      if (i === 0) { x = playerPos.x; z = playerPos.z; } // one always lands on the player
+      else {
+        const a = (i / cfg.count) * Math.PI * 2 + Math.random() * 0.9;
+        const r = 4 + Math.random() * cfg.spread;
+        x = playerPos.x + Math.cos(a) * r;
+        z = playerPos.z + Math.sin(a) * r;
+      }
+      x = THREE.MathUtils.clamp(x, this.bounds.minX, this.bounds.maxX);
+      z = THREE.MathUtils.clamp(z, this.bounds.minZ, this.bounds.maxZ);
+      const y = this.world?.getGroundHeight?.(x, z) ?? (playerPos.y - 1);
+      const mesh = this._telegraphCircle(cfg.radius, x, y, z);
+      zones.push({ x, y, z, mesh });
+    }
+    dragon.phase = { type: 'pillar', t: cfg.telegraph, total: cfg.telegraph, zones, cfg };
+  }
+
+  _kingStartCone(dragon, playerPos) {
+    const cfg = this.kingConfig.cone;
+    const p = dragon.mesh.position;
+    const dir = new THREE.Vector3(playerPos.x - p.x, 0, playerPos.z - p.z);
+    if (dir.lengthSq() < 0.0001) dir.set(0, 0, 1);
+    dir.normalize();
+    const baseY = this.world?.getGroundHeight?.(p.x, p.z) ?? 0;
+    const origin = new THREE.Vector3(p.x, baseY + 0.08, p.z);
+    const mesh = this._telegraphSector(cfg.range, cfg.halfAngle, dir, origin);
+    dragon.phase = { type: 'cone', t: cfg.telegraph, total: cfg.telegraph, dir: dir.clone(), cfg, mesh, origin };
+  }
+
+  _kingStartSummon(dragon) {
+    this._kingRoarRing(dragon);
+    dragon.phase = { type: 'summon', t: this.kingConfig.summon.roar, total: this.kingConfig.summon.roar };
+  }
+
+  _telegraphCircle(radius, x, y, z) {
+    const geometry = new THREE.CircleGeometry(radius, 28);
+    geometry.rotateX(-Math.PI / 2);
+    const mesh = new THREE.Mesh(geometry, this.material.kingTelegraph.clone());
+    mesh.position.set(x, y + 0.07, z);
+    mesh.frustumCulled = false;
+    this.group.add(mesh);
+    return mesh;
+  }
+
+  _telegraphSector(range, halfAngle, dir, origin) {
+    const geometry = new THREE.CircleGeometry(range, 40, -halfAngle, halfAngle * 2);
+    geometry.rotateX(-Math.PI / 2); // lay it flat on the ground
+    const mesh = new THREE.Mesh(geometry, this.material.kingTelegraph.clone());
+    mesh.material.opacity = 0.3;
+    mesh.position.copy(origin);
+    mesh.rotation.y = Math.atan2(-dir.z, dir.x); // aim the sector's centreline at the player
+    mesh.frustumCulled = false;
+    this.group.add(mesh);
+    return mesh;
+  }
+
+  _kingEruptColumn(zone, cfg) {
+    const geometry = new THREE.CylinderGeometry(cfg.radius * 0.9, cfg.radius, cfg.columnHeight, 16, 1, true);
+    const mesh = new THREE.Mesh(geometry, this.material.kingColumn.clone());
+    mesh.position.set(zone.x, zone.y + cfg.columnHeight / 2, zone.z);
+    mesh.frustumCulled = false;
+    this.group.add(mesh);
+    this.kingEffects.push({ mesh, geometry, material: mesh.material, ttl: cfg.columnTtl, age: 0, kind: 'column', baseY: zone.y, height: cfg.columnHeight });
+  }
+
+  _kingBreath(dragon, phase) {
+    const cfg = phase.cfg;
+    const geometry = new THREE.ConeGeometry(Math.tan(cfg.halfAngle) * cfg.range, cfg.range, 18, 1, true);
+    geometry.rotateZ(-Math.PI / 2); // point the cone along +X
+    const mesh = new THREE.Mesh(geometry, this.material.kingColumn.clone());
+    mesh.material.color.setHex(0xff5212);
+    const head = dragon.mesh.getObjectByName('head');
+    const from = head ? head.getWorldPosition(new THREE.Vector3()) : dragon.mesh.position.clone();
+    mesh.position.copy(from).addScaledVector(phase.dir, cfg.range / 2);
+    mesh.rotation.y = Math.atan2(-phase.dir.z, phase.dir.x);
+    mesh.frustumCulled = false;
+    this.group.add(mesh);
+    this.kingEffects.push({ mesh, geometry, material: mesh.material, ttl: cfg.breathTtl, age: 0, kind: 'breath' });
+  }
+
+  _kingRoarRing(dragon) {
+    const geometry = new THREE.RingGeometry(0.5, 1.0, 32);
+    geometry.rotateX(-Math.PI / 2);
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xffd23b, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    mesh.position.copy(dragon.mesh.position);
+    mesh.position.y -= dragon.altitude * 0.4;
+    mesh.frustumCulled = false;
+    this.group.add(mesh);
+    this.kingEffects.push({ mesh, geometry, material: mesh.material, ttl: this.kingConfig.summon.roar, age: 0, kind: 'roar' });
+  }
+
+  updateKingEffects(dt) {
+    for (let i = this.kingEffects.length - 1; i >= 0; i -= 1) {
+      const e = this.kingEffects[i];
+      e.age += dt;
+      const k = THREE.MathUtils.clamp(1 - e.age / e.ttl, 0, 1);
+      if (e.kind === 'column') {
+        e.material.opacity = 0.85 * k;
+        const grow = THREE.MathUtils.clamp(e.age / 0.12, 0, 1); // shoot up fast
+        e.mesh.scale.y = grow;
+        e.mesh.position.y = e.baseY + (e.height * grow) / 2;
+      } else if (e.kind === 'breath') {
+        e.material.opacity = 0.8 * k;
+      } else if (e.kind === 'roar') {
+        const s = 1 + e.age * 26;
+        e.mesh.scale.set(s, 1, s);
+        e.material.opacity = 0.7 * k;
+      }
+      if (e.age >= e.ttl) {
+        this.group.remove(e.mesh);
+        e.geometry.dispose();
+        e.material.dispose();
+        this.kingEffects.splice(i, 1);
+      }
+    }
+  }
+
+  consumeEvents() {
+    const events = this.events;
+    this.events = [];
+    return events;
   }
 
   _box(w, h, d, material = this.material.body, cast = true) {
@@ -396,7 +702,8 @@ export class DragonManager {
     for (const dragon of this.dragons) {
       if (dragon.dead) continue;
       this.updateDragon(dragon, dt, playerPosition);
-      if (dragon.boss) this.updateBoss(dragon, dt, player, playerPosition);
+      if (dragon.king) this.updateKing(dragon, dt, player, playerPosition);
+      else if (dragon.boss) this.updateBoss(dragon, dt, player, playerPosition);
       else this.tryFireball(dragon, dt, player, playerPosition);
       this.updateHealthBar(dragon);
     }
@@ -404,6 +711,7 @@ export class DragonManager {
     this.updateFireballs(dt, player, playerPosition);
     this.updateBossProjectiles(dt, player, playerPosition);
     this.updateFireZones(dt, player, playerPosition);
+    this.updateKingEffects(dt);
   }
 
   updateDragon(dragon, delta, playerPosition) {
@@ -414,7 +722,9 @@ export class DragonManager {
       if (dragon.slowTimer <= 0) this._clearSlowTint(dragon);
     }
     dragon.angle += dragon.speed * speedFactor * delta;
-    const orbitCenter = playerPosition.lengthSq() > 0.001 ? playerPosition : this.origin;
+    // The king is pinned to the crater centre; everyone else orbits the player.
+    const orbitCenter = dragon.stationaryCenter
+      ?? (playerPosition.lengthSq() > 0.001 ? playerPosition : this.origin);
 
     // Radius breathes in and out so the dragon circles the player, sometimes
     // swooping closer and sometimes pulling away.
@@ -999,6 +1309,7 @@ export class DragonManager {
     }
     for (const p of this.bossProjectiles) this.group.remove(p.mesh);
     for (const z of this.fireZones) { this.group.remove(z.mesh); z.mesh.geometry.dispose(); z.material.dispose(); }
+    this._clearKingEffects();
     this.fireballs.length = 0;
     this.bossProjectiles.length = 0;
     this.fireZones.length = 0;

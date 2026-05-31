@@ -139,6 +139,34 @@ export class SkeletonManager {
     }
   }
 
+  // Adds `count` skeletons around the player WITHOUT clearing the existing ones
+  // (used by the Dragon King's summoning roar).
+  reinforce(count, player, world) {
+    const center = getWorldPosition(player, this.tmpPlayer);
+    const base = this.skeletons.length;
+    for (let i = 0; i < count; i += 1) {
+      const id = base + i;
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 16 + (id % 4) * 3;
+      const x = THREE.MathUtils.clamp(center.x + Math.cos(angle) * radius, this.bounds.minX, this.bounds.maxX);
+      const z = THREE.MathUtils.clamp(center.z + Math.sin(angle) * radius, this.bounds.minZ, this.bounds.maxZ);
+
+      const skeleton = {
+        id,
+        health: this.health,
+        maxHealth: this.health,
+        speed: this.speed * (0.9 + (id % 3) * 0.06),
+        shootTimer: 0.8 + (id % 5) * 0.3,
+        mesh: this.createSkeletonMesh(id),
+        dead: false,
+      };
+      skeleton.mesh.position.set(x, groundHeight(world, x, z), z);
+      skeleton.mesh.userData.skeleton = skeleton;
+      this.group.add(skeleton.mesh);
+      this.skeletons.push(skeleton);
+    }
+  }
+
   update(delta, player, world) {
     const dt = Math.min(delta || 0, 0.08);
     this.elapsed += dt;
