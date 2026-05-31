@@ -7,8 +7,46 @@
 
 import { parseNBT } from './nbt.js';
 import { zlibInflate, gunzip } from './decompress.js';
+import { ANVIL_UNPACK_WASM_B64 } from './anvil-unpack-wasm.js';
 
 const SECTOR = 4096;
+
+// --- optional WASM acceleration of the block-state unpacker -------------------
+// WASM has native u64, so the 64-bit bit math runs without BigInt. The module is
+// tiny (<4 KB) so it compiles synchronously on the main thread; if WebAssembly is
+// unavailable or fails, unpackIndices falls back to the pure-JS path below.
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+let WASM; // undefined = not tried, null = unavailable, object = ready
+function wasmUnpacker() {
+  if (WASM !== undefined) return WASM;
+  try {
+    const module = new WebAssembly.Module(b64ToBytes(ANVIL_UNPACK_WASM_B64));
+    const instance = new WebAssembly.Instance(module, {});
+    const mem = instance.exports.memory;
+    // The stub-runtime module starts with ~0 pages; grow so the output region
+    // (byte 16384) plus a full 4096-entry section fits, then build the views.
+    const NEEDED = 16384 + 4096 * 2;
+    if (mem.buffer.byteLength < NEEDED) {
+      mem.grow(Math.ceil((NEEDED - mem.buffer.byteLength) / 65536));
+    }
+    WASM = {
+      unpack: instance.exports.unpack,
+      longs: new BigInt64Array(mem.buffer, 0),     // packed longs at byte 0
+      out: new Uint16Array(mem.buffer, 16384),      // unpacked indices at byte 16384
+      maxLongs: 16384 / 8,
+      capacity: (mem.buffer.byteLength - 16384) / 2,
+    };
+  } catch {
+    WASM = null;
+  }
+  return WASM;
+}
 
 function stripNamespace(name) {
   if (!name) return name;
@@ -29,6 +67,16 @@ function ceilLog2(n) {
 // padded=false (pre-1.16) packs bits tightly across long boundaries;
 // padded=true (1.16+) keeps each long's entries from spanning into the next.
 export function unpackIndices(longs, bits, count, padded) {
+  // Fast path: hand the longs to WASM (native u64), read the indices back.
+  const w = wasmUnpacker();
+  if (w && longs.length <= w.maxLongs && count <= w.capacity) {
+    for (let k = 0; k < longs.length; k += 1) w.longs[k] = longs[k];
+    w.unpack(bits, count, padded ? 1 : 0);
+    const wout = new Uint16Array(count);
+    wout.set(w.out.subarray(0, count));
+    return wout;
+  }
+
   const out = new Uint16Array(count);
   // Block-state palettes cap at 4096 entries, so bits <= 12 and the mask fits a
   // plain 32-bit Number — no BigInt mask needed.

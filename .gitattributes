@@ -7,3 +7,4 @@
 *.jpg binary
 *.zip binary
 *.mca binary
+*.wasm binary

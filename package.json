@@ -12,12 +12,15 @@
     "preview": "vite preview --host 127.0.0.1",
     "test": "node --test",
     "test:watch": "node --test --watch",
-    "bench": "node bench/run.js"
+    "bench": "node bench/run.js",
+    "build:wasm": "asc wasm/anvil-unpack.ts --outFile wasm/anvil-unpack.wasm --runtime stub --optimize && node wasm/embed.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "three": "^0.184.0",
     "vite": "^8.0.14"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "assemblyscript": "^0.28.17"
+  }
 }
