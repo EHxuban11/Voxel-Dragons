@@ -1299,8 +1299,11 @@ export class Game {
     this.audio.explosion();
   }
 
-  // Drawn: 0.3s time-slow (blue + zoom), then two forward-travelling X cuts.
-  // High damage, 30s cooldown, and it re-sheathes you.
+  // Drawn: 0.3s time-slow (blue + zoom), then a two-stroke X cut you can aim up
+  // and down. The first stroke + a katana flash fire now; the second stroke
+  // completes the X shortly after with a second flash. The blade can only land
+  // a hit once per second (no per-frame shredding), and an enemy it kills is
+  // branded with a black X. 30s cooldown, and it re-sheathes you.
   samuraiXSlash() {
     if (this.xSlashCd > 0) return;
     this.xSlashCd = 30;
@@ -1309,30 +1312,58 @@ export class Game {
     this.updateViewmodel();
     this.timeSlowTimer = 0.3;
     this.spawnXSlash();
-    this.audio.explosion();
+  }
+
+  // A bright gleam on the katana at the moment of a cut.
+  _katanaFlash(forward) {
+    const pos = this.getCameraWorldPosition().addScaledVector(forward, 1.5);
+    pos.y -= 0.15;
+    this.effects.slashMark(pos, 1.7, 0xdff2ff);
+    this.effects.impact(pos, 0xbfe0ff);
   }
 
   spawnXSlash() {
-    const forward = this.getForwardHorizontal();
+    const forward = this.getLookDirection().normalize(); // full aim: up/down too
     const right = new THREE.Vector3(forward.z, 0, -forward.x);
+    if (right.lengthSq() < 1e-4) right.set(1, 0, 0); // looking straight up/down
+    right.normalize();
+
     const group = new THREE.Group();
     const material = new THREE.MeshBasicMaterial({
-      color: 0xbfe0ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide,
+      color: 0xbfe0ff, transparent: true, opacity: 0.9, side: THREE.DoubleSide,
       depthWrite: false, blending: THREE.AdditiveBlending,
     });
-    for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+    const makeBar = (angle) => {
       const bar = new THREE.Mesh(new THREE.PlaneGeometry(1, 7), material);
       bar.rotation.z = angle;
-      group.add(bar);
-    }
+      return bar;
+    };
+    const bar1 = makeBar(Math.PI / 4);
+    const bar2 = makeBar(-Math.PI / 4);
+    bar2.visible = false; // the X completes on the second stroke
+    group.add(bar1, bar2);
     group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), forward);
-    const start = this.player.object.position.clone().addScaledVector(forward, 1.5);
-    start.y = this.player.object.position.y + 1.4;
+
+    const start = this.getCameraWorldPosition().addScaledVector(forward, 1.6);
     group.position.copy(start);
     group.frustumCulled = false;
     this.scene.add(group);
 
-    this.samuraiSlashes.push({ group, forward, right, position: start.clone(), speed: 3, traveled: 0, maxTravel: 16, damage: 200 });
+    // First stroke now: swing + katana flash. (Damage ticks in the updater so
+    // both strokes share the same once-per-second cap.)
+    this.triggerSwing(1.1, 'slash');
+    this._katanaFlash(forward);
+    this.audio.explosion();
+
+    this.samuraiSlashes.push({
+      group, bar2, forward, right, material,
+      position: start.clone(),
+      speed: 4, traveled: 0, maxTravel: 7, // a frontal X that lingers, not a fast sweeper
+      damage: 120, reach: 6, halfWidth: 2.5,
+      hitTimer: 0,          // 0 => first strike at the first cut, then once per second
+      secondCutTimer: 0.26, // the second stroke completes the X (visual + flash)
+      secondCutDone: false,
+    });
   }
 
   updateSamuraiSlashes(delta) {
@@ -1342,9 +1373,30 @@ export class Game {
       s.position.addScaledVector(s.forward, step);
       s.traveled += step;
       s.group.position.copy(s.position);
+      s.material.opacity = 0.9 * Math.max(0, 1 - s.traveled / s.maxTravel); // fade out
 
-      const hits = this.enemies.hitBox(s.position, s.forward, s.right, 1, 2.5, s.damage);
-      for (const hit of hits) this.effects.slashMark(hit.position, 2.2, 0xbfe0ff);
+      // Second stroke: reveal the other bar (forming the X) + a second flash.
+      if (!s.secondCutDone) {
+        s.secondCutTimer -= delta;
+        if (s.secondCutTimer <= 0) {
+          s.secondCutDone = true;
+          s.bar2.visible = true;
+          this.triggerSwing(1.1, 'slash');
+          this._katanaFlash(s.forward);
+          this.audio.explosion();
+        }
+      }
+
+      // The blade can only connect once per second.
+      s.hitTimer -= delta;
+      if (s.hitTimer <= 0) {
+        s.hitTimer = 1.0;
+        const hits = this.enemies.hitBox(s.position, s.forward, s.right, s.reach, s.halfWidth, s.damage);
+        for (const hit of hits) {
+          if (hit.killed) this.effects.crossMark(hit.position, 2.4); // branded on the slain
+          else this.effects.slashMark(hit.position, 2.0, 0xbfe0ff);
+        }
+      }
 
       if (s.traveled >= s.maxTravel) {
         this.scene.remove(s.group);

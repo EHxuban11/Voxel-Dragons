@@ -225,6 +225,55 @@ export class Effects {
     this.effects.push(effect);
   }
 
+  // A black X branded onto the spot where something was cut down (the samurai
+  // killing blow). Two crossed dark bars, billboarded to the camera, that hold
+  // and then fade. Uses normal blending (not additive) so black stays visible.
+  crossMark(position, size = 2.2, color = 0x0a0a0a, ttl = 1.6) {
+    if (!this.scene) return;
+
+    const pos = resolvePosition(position);
+    const group = new THREE.Group();
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(size * 0.2, size * 1.3), material);
+      bar.rotation.z = angle;
+      group.add(bar);
+    }
+    group.position.copy(pos);
+    group.frustumCulled = false;
+    group.renderOrder = 1001;
+    this.group.add(group);
+
+    const camera = this.camera;
+    const camQuat = new THREE.Quaternion();
+    const effect = {
+      object: group,
+      age: 0,
+      ttl,
+      update: (delta) => {
+        effect.age += delta;
+        const progress = THREE.MathUtils.clamp(effect.age / ttl, 0, 1);
+        if (camera) {
+          camera.getWorldQuaternion(camQuat);
+          group.quaternion.copy(camQuat);
+        }
+        const pop = Math.min(1, progress / 0.12); // snap in
+        group.scale.setScalar(0.6 + pop * 0.4);
+        material.opacity = progress < 0.7 ? 0.95 : 0.95 * (1 - (progress - 0.7) / 0.3);
+        return progress < 1;
+      },
+    };
+
+    this.effects.push(effect);
+  }
+
   shockwave(center, radius = 9, color = 0xffffff) {
     if (!this.scene) return;
 
