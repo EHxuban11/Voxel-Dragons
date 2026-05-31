@@ -72,6 +72,60 @@ function drawGrassSide(ctx) {
   }
 }
 
+// --- snow biome textures --------------------------------------------------
+function drawSnow(ctx) { speckle(ctx, '#f3f7fb', ['#ffffff', '#e4edf5', '#dbe6f0'], 211, 0.3); }
+
+function drawIce(ctx) {
+  speckle(ctx, '#a7d8ef', ['#bce6f7', '#8fcbe8', '#cdeefb'], 223, 0.22);
+  // a couple of glossy cracks
+  const rand = rng(229);
+  ctx.fillStyle = '#d8f1fb';
+  for (let i = 0; i < 5; i += 1) {
+    const x = Math.floor(rand() * SIZE);
+    const len = 3 + Math.floor(rand() * 6);
+    for (let y = 0; y < len; y += 1) ctx.fillRect(x, (Math.floor(rand() * SIZE) + y) % SIZE, 1, 1);
+  }
+}
+
+function drawSpruceLog(ctx) {
+  speckle(ctx, '#4a3320', ['#3c2918', '#553b24', '#332113'], 233, 0.32);
+  const rand = rng(239);
+  for (let x = 0; x < SIZE; x += 2) {
+    ctx.fillStyle = rand() < 0.5 ? '#3a2716' : '#553b24';
+    ctx.fillRect(x, 0, 1, SIZE);
+  }
+}
+
+function drawSpruceLeaves(ctx) {
+  speckle(ctx, '#28452f', ['#1f3a27', '#33543a', '#1a3322', '#3c6044'], 241, 0.6);
+  // dusting of snow caught in the needles
+  const rand = rng(251);
+  for (let i = 0; i < 26; i += 1) {
+    ctx.fillStyle = rand() < 0.5 ? '#eef5fb' : '#d7e6f1';
+    ctx.fillRect(Math.floor(rand() * SIZE), Math.floor(rand() * SIZE), 1, 1);
+  }
+}
+
+// Generated tinted-noise texture for dynamic (imported) blocks that have no
+// hand-drawn texture — keeps them looking voxel-ish instead of flat. Cached by
+// colour so repeated block types share one GPU texture.
+const solidCache = new Map();
+function clampByte(v) { return Math.max(0, Math.min(255, Math.round(v))); }
+function toHex(r, g, b) {
+  return `#${[r, g, b].map((v) => clampByte(v).toString(16).padStart(2, '0')).join('')}`;
+}
+function solidTexture(color) {
+  if (solidCache.has(color)) return solidCache.get(color);
+  const r = (color >> 16) & 255;
+  const g = (color >> 8) & 255;
+  const b = color & 255;
+  const base = toHex(r, g, b);
+  const shades = [toHex(r * 0.86, g * 0.86, b * 0.86), toHex(r * 1.1, g * 1.1, b * 1.1), toHex(r * 0.74, g * 0.74, b * 0.74)];
+  const tex = canvasTexture((ctx) => speckle(ctx, base, shades, (r * 7 + g * 13 + b * 17) | 0, 0.3));
+  solidCache.set(color, tex);
+  return tex;
+}
+
 let textures = null;
 
 function getTextures() {
@@ -85,6 +139,10 @@ function getTextures() {
     wood: canvasTexture(drawWood),
     leaves: canvasTexture(drawLeaves),
     water: canvasTexture(drawWater),
+    snow: canvasTexture(drawSnow),
+    ice: canvasTexture(drawIce),
+    spruce_log: canvasTexture(drawSpruceLog),
+    spruce_leaves: canvasTexture(drawSpruceLeaves),
   };
   return textures;
 }
@@ -112,7 +170,9 @@ export function createBlockMaterials(blockTypes) {
       // BoxGeometry group order: +X, -X, +Y(top), -Y(bottom), +Z, -Z
       materials.set('grass', [side, side, top, bottom, side, side]);
     } else {
-      materials.set(type, make(tex[type] ?? tex.stone, cfg));
+      // Imported blocks have no hand-drawn texture: synthesize one from cfg.color.
+      const map = tex[type] ?? (cfg.color != null ? solidTexture(cfg.color) : tex.stone);
+      materials.set(type, make(map, cfg));
     }
   }
   return materials;

@@ -1,4 +1,5 @@
 import { getIcon } from './Icons.js';
+import { getGlyph } from './Sprites.js';
 
 const DEFAULT_STATE = {
   health: 100,
@@ -476,6 +477,126 @@ function injectStyles() {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
+
+    /* ===================== pixel-art restyle ===================== */
+    .vd-hud {
+      font-family: 'PixelFont', 'Courier New', monospace;
+      text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.85);
+    }
+
+    .vd-pixel, .vd-glyph { image-rendering: pixelated; image-rendering: crisp-edges; }
+
+    .vd-help {
+      border-radius: 0;
+      border: 3px solid #000;
+      background: rgba(0, 0, 0, 0.6);
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.12);
+      font-family: 'PixelFont', monospace;
+      font-size: 8px;
+      line-height: 1.7;
+      letter-spacing: 0;
+      color: #dfe8f2;
+    }
+
+    .vd-fps {
+      font-family: 'PixelFont', monospace;
+      font-size: 9px;
+      color: #5ad84a;
+      text-shadow: 2px 2px 0 #000;
+    }
+
+    .vd-top-right {
+      border-radius: 0;
+      border: 3px solid #000;
+      background: rgba(0, 0, 0, 0.62);
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.12);
+      backdrop-filter: none;
+      font-family: 'PixelFont', monospace;
+      font-size: 9px;
+      line-height: 1.9;
+    }
+
+    .vd-topline {
+      font-size: 9px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .vd-glyph { width: 14px; height: 14px; vertical-align: middle; }
+    .vd-heart { filter: none; }
+    .vd-heart.is-used { filter: grayscale(1) brightness(0.5); }
+    .vd-coins { color: #ffd166; margin-left: 0; display: inline-flex; align-items: center; gap: 4px; }
+
+    .vd-wavebar {
+      border-radius: 0;
+      border: 3px solid #000;
+      background: rgba(0, 0, 0, 0.72);
+      gap: 4px;
+      padding: 5px;
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.16);
+    }
+
+    .vd-wave-cell {
+      width: 20px;
+      height: 20px;
+      border-radius: 0;
+      border: 2px solid #000;
+      background: rgba(0, 0, 0, 0.55);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+      font-family: 'PixelFont', monospace;
+      font-size: 8px;
+      color: #ffffff; /* future waves: white */
+      text-shadow: 1px 1px 0 #000;
+    }
+
+    .vd-wave-cell.is-done {
+      background: rgba(0, 0, 0, 0.55);
+      color: #5ad84a; /* completed: green */
+    }
+
+    .vd-wave-cell.is-current {
+      background: rgba(0, 0, 0, 0.55);
+      color: #ff4d4d; /* current: red */
+      box-shadow: inset 0 0 0 2px #ff4d4d;
+    }
+
+    .vd-shield-shell, .vd-health-shell {
+      border-radius: 0;
+      border: 3px solid #000;
+      background: #0a0d10;
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.12);
+    }
+
+    .vd-shield-fill { background: #2f8ed8; }   /* single solid colour */
+    .vd-health-fill { background: #d83b3b; }   /* single solid colour */
+    .vd-shield-label, .vd-health-label { font-family: 'PixelFont', monospace; font-size: 9px; }
+
+    .vd-weapon { font-family: 'PixelFont', monospace; font-size: 10px; }
+    .vd-ammo { font-family: 'PixelFont', monospace; font-size: 14px; }
+
+    .vd-message {
+      border-radius: 0;
+      border: 3px solid #000;
+      background: rgba(0, 0, 0, 0.72);
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.14);
+      font-family: 'PixelFont', monospace;
+      font-size: 10px;
+      line-height: 1.6;
+    }
+
+    .vd-death-text { font-family: 'PixelFont', monospace; font-size: clamp(24px, 6vw, 56px); letter-spacing: 0; }
+    .vd-death-sub { font-family: 'PixelFont', monospace; font-size: 10px; }
+
+    .vd-slot { border-radius: 0; }
+    .vd-slot-key, .vd-slot-count { font-family: 'PixelFont', monospace; }
+    .vd-slot-key { font-size: 7px; }
+    .vd-slot-count { font-size: 9px; }
+    .vd-inventory { border-radius: 0; }
+    .vd-inv-name { font-family: 'PixelFont', monospace; font-size: 9px; }
+    .vd-inv-item { font-size: 8px; }
+    .vd-guard { width: 32px; height: 32px; }
   `;
   document.head.appendChild(style);
 }
@@ -552,12 +673,12 @@ export class HUD {
     this.root.innerHTML = `
       <div class="vd-vignette"></div>
       <div class="vd-crosshair"></div>
-      <div class="vd-guard" data-hud="guard">🛡️</div>
+      <img class="vd-guard vd-glyph" data-hud="guard" src="${getGlyph('shield')}" alt="guardia" />
       <div class="vd-help">WASD mover | Espacio saltar | E o clic izq atacar | F o clic der habilidad | I inventario</div>
       <div class="vd-fps" data-hud="fps">0 FPS</div>
       <div class="vd-wavebar" data-hud="wavebar"></div>
       <div class="vd-top-right">
-        <div class="vd-topline"><span class="vd-heart" data-hud="heart">❤️</span><span class="vd-coins">🪙 <span data-hud="coins">0</span></span></div>
+        <div class="vd-topline"><img class="vd-heart vd-glyph" data-hud="heart" src="${getGlyph('heart')}" alt="vida" /><span class="vd-coins"><img class="vd-glyph" src="${getGlyph('coin')}" alt="monedas" /> <span data-hud="coins">0</span></span></div>
         Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span><br>Esqueletos: <span data-hud="skeletons">0</span><br>Brujas: <span data-hud="witches">0</span>
       </div>
       <div class="vd-message" data-hud="message"></div>
@@ -624,7 +745,6 @@ export class HUD {
     const nextState = { ...DEFAULT_STATE, ...state };
     const maxHealth = Math.max(1, firstNumber(nextState, ['maxHealth', 'healthMax'], DEFAULT_STATE.maxHealth));
     const health = Math.max(0, Math.min(maxHealth, firstNumber(nextState, ['health', 'hp'], DEFAULT_STATE.health)));
-    const healthPercent = Math.round((health / maxHealth) * 100);
     const maxShield = Math.max(0, firstNumber(nextState, ['maxShield', 'shieldMax'], DEFAULT_STATE.maxShield));
     const shield = Math.max(0, Math.min(maxShield, firstNumber(nextState, ['shield'], DEFAULT_STATE.shield)));
     const { ammo, maxAmmo } = getAmmo(nextState);
@@ -636,7 +756,6 @@ export class HUD {
     this.nodes.shieldFill.style.transform = `scaleX(${maxShield > 0 ? shield / maxShield : 0})`;
     this.nodes.health.textContent = `${Math.round(health)} / ${Math.round(maxHealth)}`;
     this.nodes.healthFill.style.transform = `scaleX(${health / maxHealth})`;
-    this.nodes.healthFill.style.filter = healthPercent <= 25 ? 'saturate(1.35) brightness(1.15)' : '';
     this.nodes.weapon.textContent = weapon;
     this.nodes.ammo.textContent = nextState.ammoText != null
       ? nextState.ammoText

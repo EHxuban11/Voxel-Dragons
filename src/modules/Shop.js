@@ -1,3 +1,5 @@
+import { getGlyph, getShopGlyph } from './Sprites.js';
+
 const STYLE_ID = 'voxel-dragons-shop-style';
 
 function injectStyles() {
@@ -80,6 +82,22 @@ function injectStyles() {
       box-shadow: 0 5px 0 #2f6e1d;
     }
     .vd-shop-continue:active { transform: translateY(3px); box-shadow: 0 2px 0 #2f6e1d; }
+
+    /* ===================== pixel-art restyle ===================== */
+    .vd-shop { font-family: 'PixelFont', 'Courier New', monospace; backdrop-filter: none; background: rgba(8, 12, 18, 0.9); }
+    .vd-shop-title { font-family: 'PixelFont', monospace; font-size: clamp(18px, 4vw, 34px); letter-spacing: 0; text-shadow: 3px 3px 0 rgba(0, 0, 0, 0.6); }
+    .vd-shop-coins { font-family: 'PixelFont', monospace; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+    .vd-shop-item {
+      border-radius: 0; border: 3px solid #000; background: rgba(20, 28, 38, 0.9);
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.12);
+    }
+    .vd-shop-item:hover { background: rgba(34, 46, 60, 0.92); }
+    .vd-shop-glyph { width: 34px; height: 34px; image-rendering: pixelated; image-rendering: crisp-edges; }
+    .vd-shop-name { font-family: 'PixelFont', monospace; font-size: 10px; }
+    .vd-shop-cost { font-family: 'PixelFont', monospace; font-size: 10px; display: flex; align-items: center; justify-content: center; gap: 5px; }
+    .vd-shop-coinico { width: 14px; height: 14px; image-rendering: pixelated; }
+    .vd-shop-owned { font-family: 'PixelFont', monospace; font-size: 8px; }
+    .vd-shop-continue { border-radius: 0; font-family: 'PixelFont', monospace; font-size: 13px; border: 3px solid #000; box-shadow: 0 5px 0 #2f6e1d; }
   `;
   document.head.appendChild(style);
 }
@@ -98,7 +116,7 @@ export class Shop {
     this.root.className = 'vd-shop';
     this.root.innerHTML = `
       <h1 class="vd-shop-title">Tienda · Oleada 5</h1>
-      <div class="vd-shop-coins">🪙 <span data-shop="coins">0</span> monedas</div>
+      <div class="vd-shop-coins"><img class="vd-shop-coinico" src="${getGlyph('coin')}" alt="" /> <span data-shop="coins">0</span> monedas</div>
       <div class="vd-shop-items" data-shop="items"></div>
       <button class="vd-shop-continue" data-shop="continue">Continuar</button>
     `;
@@ -121,9 +139,9 @@ export class Shop {
       const affordable = coins >= item.cost;
       return `
         <div class="vd-shop-item ${affordable ? '' : 'is-disabled'}" data-item="${item.id}">
-          <div class="vd-shop-emoji">${item.emoji}</div>
+          <img class="vd-shop-glyph" src="${getShopGlyph(item.id)}" alt="" />
           <div class="vd-shop-name">${item.name}</div>
-          <div class="vd-shop-cost">🪙 ${item.cost}</div>
+          <div class="vd-shop-cost"><img class="vd-shop-coinico" src="${getGlyph('coin')}" alt="" /> ${item.cost}</div>
           <div class="vd-shop-owned">Comprado: ${this.getOwned(item.id)}</div>
         </div>
       `;

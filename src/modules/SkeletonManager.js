@@ -16,6 +16,16 @@ function groundHeight(world, x, z, fallback = 0) {
   return fallback;
 }
 
+// Ground monsters all stand exactly this many blocks tall. Uniform scaling from
+// the feet (y=0) keeps the height exact without shearing the rotated arms/bow.
+const MOB_HEIGHT = 2;
+function fitToHeight(group, target = MOB_HEIGHT) {
+  group.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(group);
+  const height = box.max.y - box.min.y;
+  if (height > 0.0001) group.scale.setScalar(target / height);
+}
+
 // Skeletons follow the player and shoot arrows. Slightly less health than a
 // zombie (killable by the fire tornado). Their arrows are reflected by the
 // knight's guard.
@@ -94,6 +104,7 @@ export class SkeletonManager {
     skeleton.traverse((child) => {
       if (child.isMesh) child.userData.skeletonRoot = skeleton;
     });
+    fitToHeight(skeleton);
     return skeleton;
   }
 

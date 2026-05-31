@@ -41,6 +41,26 @@ const BLOCK_TYPES = Object.freeze({
     roughness: 1,
     metalness: 0,
   },
+  snow: {
+    color: 0xf3f7fb,
+    roughness: 0.85,
+    metalness: 0,
+  },
+  ice: {
+    color: 0xa7d8ef,
+    roughness: 0.18,
+    metalness: 0.1,
+  },
+  spruce_log: {
+    color: 0x4a3320,
+    roughness: 0.9,
+    metalness: 0,
+  },
+  spruce_leaves: {
+    color: 0x28452f,
+    roughness: 1,
+    metalness: 0,
+  },
   water: {
     color: 0x2f8ed8,
     roughness: 0.45,
@@ -104,6 +124,13 @@ export class World extends THREE.Group {
     super();
 
     this.options = { ...DEFAULT_OPTIONS, ...options };
+    // The map descriptor decides how the terrain is laid out (see modules/maps).
+    // World itself only provides the voxel-building primitives.
+    this.map = options.map ?? null;
+    // Custom (imported) maps can register extra block types on the fly; merge
+    // them into the registry so they are valid and get a material.
+    this.blockTypes = { ...BLOCK_TYPES, ...(options.extraBlocks ?? {}) };
+    this.validTypes = new Set(Object.keys(this.blockTypes));
     this.blocks = new Map();
     this.meshes = new Map();
     this.time = 0;
@@ -114,7 +141,7 @@ export class World extends THREE.Group {
     this.waterGeometry = new THREE.PlaneGeometry(BLOCK_SIZE, BLOCK_SIZE);
     this.waterGeometry.rotateX(-Math.PI / 2);
     // Minecraft-style procedural pixel textures (grass uses a 6-face array).
-    this.materials = createBlockMaterials(BLOCK_TYPES);
+    this.materials = createBlockMaterials(this.blockTypes);
 
     this.generate();
   }
@@ -122,42 +149,52 @@ export class World extends THREE.Group {
   generate() {
     this.clearMeshes();
     this.blocks.clear();
+    this.flatTop = null;
 
-    const { width, depth, maxHeight, waterLevel, seed } = this.options;
-    const halfWidth = Math.floor(width / 2);
-    const halfDepth = Math.floor(depth / 2);
-
-    for (let x = -halfWidth; x < width - halfWidth; x += 1) {
-      for (let z = -halfDepth; z < depth - halfDepth; z += 1) {
-        const broad = valueNoise2D(x, z, seed, 18);
-        const detail = valueNoise2D(x + 91, z - 47, seed + 19, 7);
-        // Rolling hills kept above the water line, so there is no ocean.
-        const height = Math.max(
-          waterLevel + 1,
-          Math.min(maxHeight - 2, Math.floor(waterLevel + 2 + (broad - 0.5) * 6 + (detail - 0.5) * 3)),
-        );
-
-        for (let y = 0; y <= height; y += 1) {
-          let type = 'stone';
-          if (y === height && height <= waterLevel + 1) {
-            type = 'sand';
-          } else if (y === height && height >= waterLevel) {
-            type = 'grass';
-          } else if (y >= height - 3) {
-            type = 'dirt';
-          }
-          this.setBlock(x, y, z, type, false);
-        }
-
-        for (let y = height + 1; y <= waterLevel; y += 1) {
-          this.setBlock(x, y, z, 'water', false);
-        }
-      }
+    // The chosen map paints the terrain using the building primitives below.
+    // Each map's generate() places blocks with rebuild=false; we rebuild once.
+    if (this.map && typeof this.map.generate === 'function') {
+      this.map.generate(this);
+    } else {
+      this.generateFlatTerrain(this.options.waterLevel + 1);
     }
 
-    this.generateTrees();
-    this.buildLandmarks();
     this.rebuildMeshes();
+  }
+
+  // Plain solid terrain used as a safe fallback when no map is supplied.
+  generateFlatTerrain(top = 5) {
+    this.forEachColumn((x, z) => {
+      for (let y = 0; y <= top; y += 1) {
+        let type = 'stone';
+        if (y === top) type = 'grass';
+        else if (y >= top - 2) type = 'dirt';
+        this.setBlock(x, y, z, type, false);
+      }
+    });
+  }
+
+  // --- terrain helpers exposed to map generators ----------------------------
+  // Smooth value noise in [0,1]. seedOffset lets a map mix several octaves.
+  noise2D(x, z, scale, seedOffset = 0) {
+    return valueNoise2D(x, z, this.options.seed + seedOffset, scale);
+  }
+
+  // Deterministic hash in [0,1] for scattering features (trees, etc.).
+  hash(x, z, seedOffset = 0) {
+    return hash2D(x, z, this.options.seed + seedOffset);
+  }
+
+  // Iterates every (x, z) column of the map, optionally shrinking the border.
+  forEachColumn(callback, margin = 0) {
+    const { width, depth } = this.options;
+    const halfWidth = Math.floor(width / 2);
+    const halfDepth = Math.floor(depth / 2);
+    for (let x = -halfWidth + margin; x < width - halfWidth - margin; x += 1) {
+      for (let z = -halfDepth + margin; z < depth - halfDepth - margin; z += 1) {
+        callback(x, z);
+      }
+    }
   }
 
   generateFlat(top = 5) {
@@ -183,22 +220,6 @@ export class World extends THREE.Group {
     this.rebuildMeshes();
   }
 
-  generateTrees() {
-    const { width, depth, seed, waterLevel } = this.options;
-    const halfWidth = Math.floor(width / 2);
-    const halfDepth = Math.floor(depth / 2);
-
-    for (let x = -halfWidth + 3; x < width - halfWidth - 3; x += 1) {
-      for (let z = -halfDepth + 3; z < depth - halfDepth - 3; z += 1) {
-        if (hash2D(x * 3, z * 3, seed + 91) > 0.985) {
-          const y = this.getSurfaceY(x, z);
-          if (y === null || y < waterLevel || this.getBlock(x, y, z) !== 'grass') continue;
-          this.plantTree(x, y, z);
-        }
-      }
-    }
-  }
-
   plantTree(x, baseY, z) {
     for (let trunk = 1; trunk <= 4; trunk += 1) {
       this.setBlock(x, baseY + trunk, z, 'wood', false);
@@ -214,6 +235,33 @@ export class World extends THREE.Group {
     }
   }
 
+  // Tall conical spruce with snow-dusted needles. The foliage radius cycles in
+  // tiers (1→3) going down so it reads as a layered evergreen, and the very tip
+  // is capped with snow.
+  plantSpruce(x, baseY, z, height = 12) {
+    const top = baseY + height;
+    for (let trunk = 1; trunk <= height; trunk += 1) {
+      this.setBlock(x, baseY + trunk, z, 'spruce_log', false);
+    }
+
+    // Pointed tip plus a snow cap.
+    this.setBlock(x, top, z, 'spruce_leaves', false);
+    this.setBlock(x, top + 1, z, 'snow', false);
+
+    let radius = 1;
+    for (let y = top - 1; y >= baseY + 3; y -= 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        for (let dz = -radius; dz <= radius; dz += 1) {
+          if (dx === 0 && dz === 0) continue; // leave room for the trunk
+          if (Math.abs(dx) + Math.abs(dz) > radius + 1) continue; // round the corners
+          this.setBlock(x + dx, y, z + dz, 'spruce_leaves', false);
+        }
+      }
+      radius += 1;
+      if (radius > 3) radius = 1; // start a new (narrower) tier
+    }
+  }
+
   clearColumn(x, z) {
     const ix = Math.floor(x);
     const iz = Math.floor(z);
@@ -222,110 +270,25 @@ export class World extends THREE.Group {
     }
   }
 
-  buildLandmarks() {
-    const { waterLevel } = this.options;
-    const plateauTop = waterLevel + 2;
-    const plateauRadius = 15;
-    const castleHalf = 8;
-    const lake = { x: 12, z: 12, radius: 4 };
-
-    // Flat grass plateau for the castle (no moat).
-    for (let x = -plateauRadius - 1; x <= plateauRadius + 1; x += 1) {
-      for (let z = -plateauRadius - 1; z <= plateauRadius + 1; z += 1) {
-        if (Math.hypot(x, z) > plateauRadius) continue;
-        this.clearColumn(x, z);
-        for (let y = 0; y <= plateauTop; y += 1) {
-          let type = 'stone';
-          if (y === plateauTop) type = 'grass';
-          else if (y >= plateauTop - 2) type = 'dirt';
-          this.setBlock(x, y, z, type, false);
-        }
-      }
-    }
-
-    // A single small lake tucked into a corner beside the castle.
-    const bed = waterLevel - 2;
-    for (let x = lake.x - lake.radius - 1; x <= lake.x + lake.radius + 1; x += 1) {
-      for (let z = lake.z - lake.radius - 1; z <= lake.z + lake.radius + 1; z += 1) {
-        if (Math.hypot(x - lake.x, z - lake.z) > lake.radius) continue;
-        this.clearColumn(x, z);
-        for (let y = 0; y <= bed; y += 1) {
-          this.setBlock(x, y, z, y >= bed - 1 ? 'sand' : 'stone', false);
-        }
-        for (let y = bed + 1; y <= waterLevel; y += 1) {
-          this.setBlock(x, y, z, 'water', false);
-        }
-      }
-    }
-
-    this.buildCastle(castleHalf, plateauTop);
-    this.buildForest();
-  }
-
-  buildCastle(half, base) {
-    const wallHeight = 5;
-    const towerHeight = 8;
-
-    // Outer walls with a south gate gap and battlements.
-    for (let x = -half; x <= half; x += 1) {
-      for (let z = -half; z <= half; z += 1) {
-        const onPerimeter = Math.abs(x) === half || Math.abs(z) === half;
-        if (!onPerimeter) continue;
-        if (z === half && Math.abs(x) <= 1) continue; // gate
-        for (let h = 1; h <= wallHeight; h += 1) {
-          if (h === wallHeight && ((x + z) & 1) === 1) continue; // crenellations
-          this.setBlock(x, base + h, z, 'stone', false);
-        }
-      }
-    }
-
-    // Taller 3x3 corner towers.
-    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-      const cx = sx * half;
-      const cz = sz * half;
-      for (let dx = -1; dx <= 1; dx += 1) {
-        for (let dz = -1; dz <= 1; dz += 1) {
-          const ring = Math.abs(dx) === 1 || Math.abs(dz) === 1;
-          for (let h = 1; h <= towerHeight; h += 1) {
-            if (!ring && h < towerHeight) continue; // hollow inside
-            if (h === towerHeight && ((dx + dz) & 1) === 1) continue;
-            this.setBlock(cx + dx, base + h, cz + dz, 'stone', false);
-          }
-        }
-      }
-    }
-  }
-
-  buildForest() {
-    const { width, depth, waterLevel, seed } = this.options;
-    const centerX = -Math.floor(width / 4);
-    const centerZ = Math.floor(depth / 4);
-
-    for (let x = centerX - 7; x <= centerX + 7; x += 1) {
-      for (let z = centerZ - 7; z <= centerZ + 7; z += 1) {
-        if (hash2D(x * 7, z * 7, seed + 313) > 0.76) {
-          const y = this.getSurfaceY(x, z);
-          if (y === null || y < waterLevel || this.getBlock(x, y, z) !== 'grass') continue;
-          this.plantTree(x, y, z);
-        }
-      }
-    }
-  }
 
   getSpawnPoint() {
     const { width, depth, waterLevel } = this.options;
     const searchRadius = Math.floor(Math.min(width, depth) / 2);
 
-    let best = null;
+    // Spawn on the first solid, walkable surface found near the centre. Works
+    // for any map (grass meadow, snow field, …) since it no longer requires a
+    // specific block type — just a non-water top that is not a tree.
+    const walkable = (type) => Boolean(type) && type !== 'water'
+      && type !== 'leaves' && type !== 'spruce_leaves' && type !== 'wood' && type !== 'spruce_log';
+
     for (let radius = 0; radius <= searchRadius; radius += 1) {
       for (let x = -radius; x <= radius; x += 1) {
         for (let z = -radius; z <= radius; z += 1) {
           if (Math.abs(x) !== radius && Math.abs(z) !== radius) continue;
 
           const y = this.getSurfaceY(x, z);
-          if (y !== null && y >= waterLevel && this.getBlock(x, y, z) === 'grass') {
-            best = new THREE.Vector3(x + 0.5, y + 2.2, z + 0.5);
-            return best;
+          if (y !== null && y >= waterLevel && walkable(this.getBlock(x, y, z))) {
+            return new THREE.Vector3(x + 0.5, y + 2.2, z + 0.5);
           }
         }
       }
@@ -407,7 +370,7 @@ export class World extends THREE.Group {
   }
 
   addBlock(hit, type = 'dirt') {
-    if (!hit?.position || !VALID_TYPES.has(type)) return false;
+    if (!hit?.position || !this.validTypes.has(type)) return false;
 
     // Aiming directly at water fills that cell (you can build in water).
     if (hit.type === 'water') {
@@ -449,7 +412,7 @@ export class World extends THREE.Group {
       return removed;
     }
 
-    if (!VALID_TYPES.has(type) || iy < 0 || iy >= this.options.maxHeight) return false;
+    if (!this.validTypes.has(type) || iy < 0 || iy >= this.options.maxHeight) return false;
     this.blocks.set(key, type);
     if (rebuild) this.rebuildMeshes();
     return true;
@@ -475,7 +438,7 @@ export class World extends THREE.Group {
   rebuildMeshes() {
     this.clearMeshes();
 
-    const blocksByType = new Map(Object.keys(BLOCK_TYPES).map((type) => [type, []]));
+    const blocksByType = new Map(Object.keys(this.blockTypes).map((type) => [type, []]));
     const waterTops = [];
     for (const [key, type] of this.blocks) {
       const [x, y, z] = parseBlockKey(key);

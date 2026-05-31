@@ -12,6 +12,7 @@ import { Effects } from './Effects.js';
 import { GameAudio } from './Audio.js';
 import { Inventory } from './Inventory.js';
 import { CHARACTERS } from './Characters.js';
+import { MAPS } from './maps/index.js';
 import { buildViewmodel, disposeViewmodel } from './Viewmodels.js';
 import { Shop } from './Shop.js';
 import { MageController } from './MageController.js';
@@ -21,6 +22,7 @@ export class Game {
   constructor(root, options = {}) {
     this.root = root;
     this.character = options.character ?? CHARACTERS[0];
+    this.map = options.map ?? MAPS[0];
     this.onExit = options.onExit ?? null;
     this.clock = new THREE.Clock();
     this.scene = new THREE.Scene();
@@ -39,7 +41,12 @@ export class Game {
     this.effects = new Effects(this.scene);
     this.effects.camera = this.camera; // for camera-facing slash marks
     this.inventory = new Inventory(this.character);
-    this.world = new World(BALANCE.world);
+    this.world = new World({
+      ...BALANCE.world,
+      ...(this.map.dimensions ?? {}),
+      map: this.map,
+      extraBlocks: this.map.extraBlocks,
+    });
     this.player = new Player(this.camera, {
       ...BALANCE.player,
       maxHealth: this.character.health,
@@ -75,11 +82,15 @@ export class Game {
         }
       }
     });
+    // Enemy/player bounds follow the active world's footprint (custom maps can
+    // be larger than the built-in ones).
+    const worldWidth = this.world.options.width;
+    const worldDepth = this.world.options.depth;
     const bounds = {
-      minX: -BALANCE.world.width / 2 + 2,
-      maxX: BALANCE.world.width / 2 - 2,
-      minZ: -BALANCE.world.depth / 2 + 2,
-      maxZ: BALANCE.world.depth / 2 - 2,
+      minX: -worldWidth / 2 + 2,
+      maxX: worldWidth / 2 - 2,
+      minZ: -worldDepth / 2 + 2,
+      maxZ: worldDepth / 2 - 2,
     };
     this.dragons = new DragonManager(this.scene, {
       count: 0,
@@ -181,10 +192,10 @@ export class Game {
 
     // The player cannot leave the map (invisible barrier at the edges).
     this.playerBounds = {
-      minX: -BALANCE.world.width / 2 + 1,
-      maxX: BALANCE.world.width / 2 - 1,
-      minZ: -BALANCE.world.depth / 2 + 1,
-      maxZ: BALANCE.world.depth / 2 - 1,
+      minX: -worldWidth / 2 + 1,
+      maxX: worldWidth / 2 - 1,
+      minZ: -worldDepth / 2 + 1,
+      maxZ: worldDepth / 2 - 1,
     };
 
     this.targetOutline = this.createTargetOutline();
@@ -248,11 +259,18 @@ export class Game {
   }
 
   setupScene() {
-    this.scene.background = new THREE.Color(BALANCE.colors.sky);
-    this.scene.fog = new THREE.Fog(BALANCE.colors.sky, 80, 340);
-    const hemi = new THREE.HemisphereLight(0xcfe8ff, 0x31451e, 1.5);
+    // The active map can recolour the sky, fog and lighting (see modules/maps).
+    const env = this.map?.environment ?? {};
+    const sky = env.sky ?? BALANCE.colors.sky;
+    const fog = env.fog ?? { color: sky, near: 80, far: 340 };
+    const hemiCfg = env.hemisphere ?? { sky: 0xcfe8ff, ground: 0x31451e, intensity: 1.5 };
+    const sunCfg = env.sun ?? { color: 0xfff0c5, intensity: 2.4 };
+
+    this.scene.background = new THREE.Color(sky);
+    this.scene.fog = new THREE.Fog(fog.color ?? sky, fog.near ?? 80, fog.far ?? 340);
+    const hemi = new THREE.HemisphereLight(hemiCfg.sky, hemiCfg.ground, hemiCfg.intensity);
     this.scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xfff0c5, 2.4);
+    const sun = new THREE.DirectionalLight(sunCfg.color, sunCfg.intensity);
     sun.position.set(70, 120, 50);
     sun.castShadow = true;
     sun.shadow.camera.left = -90;

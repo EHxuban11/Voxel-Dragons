@@ -43,6 +43,12 @@ export class Input extends EventTarget {
     this.mouse = { x: 0, y: 0, dx: 0, dy: 0, wheel: 0 };
     this.touch = { active: false, x: 0, y: 0, dx: 0, dy: 0 };
 
+    // Hotbar wheel: scroll deltas are accumulated and a slot only changes once
+    // this much (normalized to pixels) has built up, so a single mouse notch or
+    // trackpad swipe advances exactly one slot instead of skipping several.
+    this._wheelAccum = 0;
+    this.wheelStep = options.wheelStep ?? 100;
+
     this._lastTouch = null;
     this._listeners = [];
 
@@ -179,16 +185,31 @@ export class Input extends EventTarget {
   _onWheel = (event) => {
     event.preventDefault();
 
-    const direction = Math.sign(event.deltaY);
-    this.mouse.wheel += event.deltaY;
+    // Normalize to pixels: line/page modes report tiny deltas.
+    let delta = event.deltaY;
+    if (event.deltaMode === 1) delta *= 16; // lines
+    else if (event.deltaMode === 2) delta *= this.window.innerHeight || 800; // pages
 
-    if (direction > 0) {
-      this._queue('weaponNext', { delta: event.deltaY, source: 'wheel' });
-    } else if (direction < 0) {
-      this._queue('weaponPrev', { delta: event.deltaY, source: 'wheel' });
+    const direction = Math.sign(delta);
+    this.mouse.wheel += delta;
+
+    // Reset the accumulator when the scroll direction flips so a quick back-and-
+    // forth doesn't carry leftover momentum into the other direction.
+    if (direction !== 0 && Math.sign(this._wheelAccum) !== 0 && direction !== Math.sign(this._wheelAccum)) {
+      this._wheelAccum = 0;
+    }
+    this._wheelAccum += delta;
+
+    while (this._wheelAccum >= this.wheelStep) {
+      this._wheelAccum -= this.wheelStep;
+      this._queue('weaponNext', { source: 'wheel' });
+    }
+    while (this._wheelAccum <= -this.wheelStep) {
+      this._wheelAccum += this.wheelStep;
+      this._queue('weaponPrev', { source: 'wheel' });
     }
 
-    this._emit('input:wheel', { delta: event.deltaY, direction });
+    this._emit('input:wheel', { delta, direction });
   };
 
   _onPointerLockChange = () => {

@@ -17,6 +17,17 @@ function groundHeight(world, x, z, fallback = 0) {
   return fallback;
 }
 
+// Ground monsters all stand exactly this many blocks tall. Scaling the whole
+// model uniformly (from the feet at y=0) guarantees the height without shearing
+// the rotated limbs that a non-uniform scale would distort.
+const MOB_HEIGHT = 2;
+function fitToHeight(group, target = MOB_HEIGHT) {
+  group.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(group);
+  const height = box.max.y - box.min.y;
+  if (height > 0.0001) group.scale.setScalar(target / height);
+}
+
 export class ZombieManager {
   constructor(scene = null, options = {}) {
     this.scene = scene?.isScene ? scene : null;
@@ -86,6 +97,7 @@ export class ZombieManager {
       if (child.isMesh) child.userData.zombieRoot = zombie;
     });
 
+    fitToHeight(zombie);
     return zombie;
   }
 
