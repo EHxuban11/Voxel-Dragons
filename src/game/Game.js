@@ -252,6 +252,8 @@ export class Game {
         })
       : null;
     this._luffyLastHp = this.player.health + this.player.shield;
+    this._luffyBaseMove = this.player.config.moveSpeed;
+    this._luffyBaseJump = this.player.config.jumpSpeed;
     this.shop = null;
     this.shopDone = false;
     this.victory = false;
@@ -685,6 +687,9 @@ export class Game {
       const hp = this.player.health + this.player.shield;
       if (hp < this._luffyLastHp - 0.001) this.luffy.onPlayerHit();
       this._luffyLastHp = hp;
+      // Gear 5 (and Snakeman) jump higher / move faster.
+      this.player.config.moveSpeed = this._luffyBaseMove * this.luffy.speedMult;
+      this.player.config.jumpSpeed = this._luffyBaseJump * this.luffy.jumpMult;
     }
     p.begin('dragons');
     this.dragons.update(delta, this.player, this.scene);

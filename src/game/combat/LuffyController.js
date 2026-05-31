@@ -2,13 +2,17 @@ import * as THREE from 'three';
 import { BALANCE } from '../../core/config/GameBalance.js';
 
 const ANY_DIR = new THREE.Vector3(1, 0, 0); // hitMelee with arcCos -1 ignores direction
+const DOWN = new THREE.Vector3(0, -1, 0);
 
-// Luffy's kit. His arm is the weapon: every skill is a forward stretch-punch
-// (a box hit along the look direction, so it aims up and down). A gear gauge
+// Luffy's kit. His arm is the weapon: most skills are a forward stretch-punch
+// (a box hit along the look direction, so they aim up and down). A gear gauge
 // fills by landing hits and empties when he is hit; filling it advances the
-// form (Gear 1 -> 2 -> Gear 4 Boundman -> Snakeman -> Gear 5), each needing
-// more. Each form scales the three hotbar skills and has its own right-click
-// special (Gear 2: Cañón that resets the form; Boundman: King Kong Gun).
+// form. Each form (Gear 1/2, Gear 4 Boundman/Snakeman, Gear 5) defines its own
+// three hotbar slots and a right-click special.
+//
+// Transitions: Gear1 -fill-> Gear2 -fill-> Boundman -fill-> Gear5;
+//              Boundman -right click-> Snakeman -fill-> Gear5;
+//              Gear2 -right click-> Cañón (resets to Gear 1).
 export class LuffyController {
   constructor(deps) {
     this.scene = deps.scene;
@@ -25,22 +29,28 @@ export class LuffyController {
     this.gauge = 0;
     this.cooldowns = { pistol: 0, bazooka: 0, gatling: 0, secondary: 0 };
     this.gatling = null;     // active barrage: { timer, tick, side, stats }
-    this.pendingSlam = null; // King Kong Gun: { timer, cfg }
+    this.pendingSlam = null; // leap special: { timer, cfg, mode }
     this.transients = [];    // stretch-arm + smoke visuals
   }
 
   // --- gear / gauge ----------------------------------------------------------
   gear() { return this.cfg.gears[this.gearIndex]; }
   get gaugeMax() { return this.cfg.gaugeMax[this.gearIndex]; }
-  get gearName() { return this.cfg.gearNames[this.gearIndex]; }
+  get gearName() { return this.gear().name; }
   get gaugeRatio() { return THREE.MathUtils.clamp(this.gauge / this.gaugeMax, 0, 1); }
-  currentLabels() { return this.gear().labels; }
+  get speedMult() { return this.gear().speed ?? 1; }
+  get jumpMult() { return this.gear().jump ?? 1; }
+  currentLabels() {
+    const s = this.gear().slots;
+    return { pistol: s.pistol.label, bazooka: s.bazooka.label, gatling: s.gatling.label };
+  }
 
   _fill(amount) {
-    if (this.gearIndex >= this.cfg.gaugeMax.length - 1) { this.gauge = this.gaugeMax; return; }
+    const top = this.cfg.gaugeMax.length - 1;
+    if (this.gearIndex >= top) { this.gauge = this.gaugeMax; return; }
     this.gauge += amount;
     if (this.gauge >= this.gaugeMax) {
-      this.gearIndex += 1;
+      this.gearIndex = this.gear().fillTo; // read current form's target, then advance
       this.gauge = 0;
       this.hud?.showMessage?.(`⬆ ${this.gearName}`, 1300);
       this.audio?.explosion?.();
@@ -67,45 +77,63 @@ export class LuffyController {
     return r.normalize();
   }
 
-  // Resolve a hotbar archetype to the current form's stats.
-  skillStats(id) {
+  slotStats(id) {
     const base = this.cfg.base[id];
-    const g = this.gear();
+    const slot = this.gear().slots[id];
     return {
       ...base,
-      damage: Math.round(base.damage * g.dmg),
-      range: base.range * g.range,
-      halfWidth: base.halfWidth * g.width,
-      cooldown: base.cooldown * g.cd,
-      smoke: g.smoke,
+      label: slot.label,
+      behavior: slot.behavior,
+      damage: Math.round(base.damage * slot.dmg),
+      range: base.range * slot.range,
+      halfWidth: base.halfWidth * slot.width,
+      cooldown: base.cooldown * slot.cd,
+      smoke: this.gear().smoke,
     };
   }
 
   // --- hotbar skills ---------------------------------------------------------
   useSkill(id) {
-    if (!this.cfg.base[id]) return false;
+    const slot = this.gear().slots[id];
+    if (!slot) return false;
     if ((this.cooldowns[id] ?? 0) > 0) return false;
-    if (id === 'gatling' && this.gatling) return false;
-    const stats = this.skillStats(id);
+
+    const b = slot.behavior;
+    // Leap specials read their own cfg (own damage + cooldown).
+    if (b === 'kingkong' || b === 'bajrang' || b === 'skybeam') {
+      if (this.gatling) return false;
+      const cfg = this.cfg[b];
+      this.cooldowns[id] = cfg.cooldown;
+      this._leap(cfg, b === 'skybeam' ? 'beam' : 'slam', b);
+      return true;
+    }
+
+    if (b === 'gatling' && this.gatling) return false;
+    const stats = this.slotStats(id);
     this.cooldowns[id] = stats.cooldown;
-    if (id === 'pistol') this._punch(stats, { scale: 1.0, color: 0xffe0b0 });
-    else if (id === 'bazooka') this._bazooka(stats);
-    else if (id === 'gatling') this.gatling = { timer: stats.duration ?? 2.0, tick: 0, side: 1, stats };
+    if (b === 'gatling') this.gatling = { timer: stats.duration ?? 2.0, tick: 0, side: 1, stats };
+    else if (b === 'bazooka') this._bazooka(stats);
+    else this._punch(stats, { autoaim: b === 'autoaim', pierce: b === 'penetrate' });
     return true;
   }
 
-  // One forward stretch-punch (a box hit along the aim).
-  _punch(stats, { scale = 1, color = 0xffe0b0, sideOffset = 0 } = {}) {
+  // One forward stretch-punch (a box hit along the aim, or toward the nearest
+  // enemy when autoaiming).
+  _punch(stats, { scale = 1, color = 0xffe0b0, sideOffset = 0, autoaim = false, pierce = false } = {}) {
     const origin = this.origin();
-    const dir = this.direction();
+    let dir = this.direction();
+    if (autoaim) {
+      const near = this.enemies.nearestTo?.(origin, stats.range + 8);
+      if (near) dir = near.clone().sub(origin).normalize();
+    }
     const right = this._right(dir);
     const from = origin.clone().addScaledVector(right, sideOffset);
 
     const hits = this.enemies.hitBox(from, dir, right, stats.range, stats.halfWidth, stats.damage);
     if (hits.length) this._fill(hits.length * (stats.fill ?? 1));
 
-    const reach = hits.length ? Math.min(stats.range, this._nearest(hits, from)) + 0.4 : stats.range;
-    this._spawnArm(from, dir, reach, scale, stats.smoke, color);
+    const reach = (hits.length && !pierce) ? Math.min(stats.range, this._nearest(hits, from)) + 0.4 : stats.range;
+    this._spawnArm(from, dir, reach, scale, stats.smoke, pierce ? 0xbfe0ff : color);
     for (const h of hits) {
       this.effects.impact(h.position, color);
       if (stats.smoke) this._spawnSmoke(h.position);
@@ -130,11 +158,40 @@ export class LuffyController {
     this.audio?.explosion?.();
   }
 
+  // Leap up, then resolve a ground slam (or a sky lightning beam) below.
+  _leap(cfg, mode, name) {
+    this.player.velocity.y = Math.max(this.player.velocity.y, cfg.jump);
+    this.player.isGrounded = false;
+    this.pendingSlam = { timer: cfg.slamDelay, cfg, mode };
+    const labels = { kingkong: '🦍 King Kong Gun', bajrang: '🐵 Bajrang Gun', skybeam: '⚡ Rayo Divino' };
+    this.hud?.showMessage?.(labels[name] ?? 'Golpe', 1200);
+    this.audio?.shoot?.('blaster');
+  }
+
+  _resolveSlam(cfg, mode) {
+    const center = this.player.object.position.clone();
+    center.y = this.world?.getGroundHeight?.(center.x, center.z) ?? center.y;
+    const hits = this.enemies.hitMelee(center, ANY_DIR, cfg.radius, cfg.damage, -1);
+    if (hits?.length) this._fill(hits.length * 0.5);
+    this.enemies.knockback(center, cfg.radius, cfg.knockback);
+    this.effects.explosion(center);
+    this.effects.shockwave(center.clone(), cfg.radius, 0xffffff);
+    this.effects.shockwave(center.clone(), cfg.radius * 0.6, 0xffd060);
+    if (mode === 'beam') {
+      const top = center.clone();
+      top.y += 30;
+      this.effects.beam?.(top, center.clone(), 0xbfe0ff);
+    } else {
+      this._spawnArm(center.clone().setY(center.y + 9), DOWN, 9, 3.2, true, 0xffd0a0);
+    }
+    this.audio?.explosion?.();
+  }
+
   // --- right-click special (form-dependent) ---------------------------------
   secondary() {
     const sec = this.gear().secondary;
     if (sec === 'cannon') return this._cannon();
-    if (sec === 'kingkong') return this._kingKong();
+    if (sec === 'toSnakeman') return this._toSnakeman();
     this.hud?.showMessage?.('Sin habilidad de clic derecho', 700);
     return false;
   }
@@ -143,7 +200,7 @@ export class LuffyController {
   _cannon() {
     if ((this.cooldowns.secondary ?? 0) > 0) return false;
     const bp = this.cfg.cannon;
-    this.cooldowns.secondary = bp.cooldown;
+    this.cooldowns.secondary = 0.4;
     const origin = this.origin();
     const dir = this.direction();
     const right = this._right(dir);
@@ -163,32 +220,13 @@ export class LuffyController {
     return true;
   }
 
-  // Boundman — King Kong Gun: leap up, then a giant ground slam.
-  _kingKong() {
-    if ((this.cooldowns.secondary ?? 0) > 0) return false;
-    const kk = this.cfg.kingkong;
-    this.cooldowns.secondary = kk.cooldown;
-    this.player.velocity.y = Math.max(this.player.velocity.y, kk.jump); // leap
-    this.player.isGrounded = false;
-    this.pendingSlam = { timer: kk.slamDelay, cfg: kk };
-    this.hud?.showMessage?.('🦍 King Kong Gun', 1300);
-    this.audio?.shoot?.('blaster');
-    return true;
-  }
-
-  _slam(kk) {
-    const center = this.player.object.position.clone();
-    const groundY = this.world?.getGroundHeight?.(center.x, center.z) ?? center.y;
-    center.y = groundY;
-    const hits = this.enemies.hitMelee(center, ANY_DIR, kk.radius, kk.damage, -1); // AoE
-    if (hits?.length) this._fill(hits.length * 0.5);
-    this.enemies.knockback(center, kk.radius, kk.knockback);
-    this.effects.explosion(center);
-    this.effects.shockwave(center.clone(), kk.radius, 0xffffff);
-    this.effects.shockwave(center.clone(), kk.radius * 0.6, 0xffd060);
+  // Boundman — right-click: morph into Snakeman (keeps the gauge progress).
+  _toSnakeman() {
+    this.gearIndex = 3;
+    this.hud?.showMessage?.('🐍 Gear 4: Snakeman', 1300);
     this.audio?.explosion?.();
-    // A giant fist crashing straight down onto the spot.
-    this._spawnArm(center.clone().setY(center.y + 9), new THREE.Vector3(0, -1, 0), 9, 3.2, true, 0xffd0a0);
+    this.effects?.shockwave?.(this.player.object.position.clone(), 3.2, 0x9be36a);
+    return true;
   }
 
   // --- visuals ---------------------------------------------------------------
@@ -255,7 +293,10 @@ export class LuffyController {
 
     if (this.pendingSlam) {
       this.pendingSlam.timer -= delta;
-      if (this.pendingSlam.timer <= 0) { this._slam(this.pendingSlam.cfg); this.pendingSlam = null; }
+      if (this.pendingSlam.timer <= 0) {
+        this._resolveSlam(this.pendingSlam.cfg, this.pendingSlam.mode);
+        this.pendingSlam = null;
+      }
     }
 
     for (let i = this.transients.length - 1; i >= 0; i -= 1) {

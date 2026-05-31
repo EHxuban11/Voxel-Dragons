@@ -1,6 +1,6 @@
-// Regression tests for Luffy's gear/gauge state machine and form-dependent
-// right-click. LuffyController only uses THREE math + injected deps, so it runs
-// headless with simple stubs (no WebGL/canvas).
+// Regression tests for Luffy's gear/gauge state machine, form transitions and
+// per-form movesets. LuffyController only uses THREE math + injected deps, so it
+// runs headless with simple stubs (no WebGL/canvas).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
@@ -14,10 +14,11 @@ function makeLuffy(hits = 0) {
     hitBox() { return Array.from({ length: this.hitCount }, () => ({ position: new THREE.Vector3() })); },
     hitMelee() { return Array.from({ length: this.hitCount }, () => ({ position: new THREE.Vector3() })); },
     knockback: noop,
+    nearestTo: () => new THREE.Vector3(0, 0, -5),
   };
   return new LuffyController({
     scene: { add: noop, remove: noop },
-    effects: { impact: noop, shockwave: noop, explosion: noop },
+    effects: { impact: noop, shockwave: noop, explosion: noop, beam: noop },
     enemies,
     camera: new THREE.PerspectiveCamera(75, 1, 0.1, 100),
     player: { object: { position: new THREE.Vector3() }, velocity: new THREE.Vector3(), isGrounded: true },
@@ -27,76 +28,105 @@ function makeLuffy(hits = 0) {
   });
 }
 
+// Form indices for readability.
+const GEAR1 = 0; const GEAR2 = 1; const BOUND = 2; const SNAKE = 3; const GEAR5 = 4;
+
 test('the gauge gets harder to fill each gear (strictly increasing)', () => {
   const max = BALANCE.luffy.gaugeMax;
   for (let i = 1; i < max.length; i += 1) assert.ok(max[i] > max[i - 1], `gear ${i} needs more`);
-  assert.equal(max.length, BALANCE.luffy.gearNames.length, 'one threshold per form');
+  assert.equal(max.length, BALANCE.luffy.gears.length, 'one threshold per form');
 });
 
-test('landing hits fills the gauge and filling it advances the form', () => {
+test('landing hits fills the gauge and Gear 1 fills into Gear 2', () => {
   const L = makeLuffy(4); // each punch lands 4 hits
-  assert.equal(L.gearIndex, 0);
-  L.useSkill('pistol'); // pistol fill 2 * 4 hits = 8 == gaugeMax[0]
-  assert.equal(L.gearIndex, 1, 'filled Gear 1 -> Gear 2');
+  assert.equal(L.gearIndex, GEAR1);
+  L.useSkill('pistol'); // pistol fill 2 * 4 = 8 == gaugeMax[0]
+  assert.equal(L.gearIndex, GEAR2);
   assert.equal(L.gauge, 0, 'gauge resets on gear-up');
-  assert.equal(L.gearName, 'Gear 2');
 });
 
 test('getting hit empties the gauge but keeps the form', () => {
   const L = makeLuffy(0);
-  L.gearIndex = 2;
+  L.gearIndex = BOUND;
   L.gauge = 7;
   L.onPlayerHit();
   assert.equal(L.gauge, 0);
-  assert.equal(L.gearIndex, 2, 'form is kept when hit');
+  assert.equal(L.gearIndex, BOUND, 'form is kept when hit');
 });
 
-test('right-click is form-dependent: none / Cañón / King Kong Gun', () => {
-  const L = makeLuffy(0);
-  assert.equal(L.cfg.gears[0].secondary, 'none', 'Gear 1 has no right-click move');
-  assert.equal(L.cfg.gears[1].secondary, 'cannon', 'Gear 2 -> Cañón');
-  assert.equal(L.cfg.gears[2].secondary, 'kingkong', 'Boundman -> King Kong Gun');
+test('Gear 2 fills into Boundman; Boundman and Snakeman both fill straight to Gear 5', () => {
+  assert.equal(BALANCE.luffy.gears[GEAR2].fillTo, BOUND);
+  assert.equal(BALANCE.luffy.gears[BOUND].fillTo, GEAR5, 'Boundman skips Snakeman on fill');
+  assert.equal(BALANCE.luffy.gears[SNAKE].fillTo, GEAR5);
+  const L = makeLuffy(20);
+  L.gearIndex = BOUND;
+  L.useSkill('pistol'); // plenty of fill
+  assert.equal(L.gearIndex, GEAR5, 'filling Boundman -> Gear 5');
 });
 
 test('the Gear-2 Cañón spends the whole form back to Gear 1', () => {
   const L = makeLuffy(0);
-  L.gearIndex = 1;
+  L.gearIndex = GEAR2;
   L.gauge = 6;
   assert.equal(L.secondary(), true);
-  assert.equal(L.gearIndex, 0, 'back to Gear 1');
+  assert.equal(L.gearIndex, GEAR1, 'back to Gear 1');
   assert.equal(L.gauge, 0, 'progress lost');
 });
 
-test('Boundman King Kong Gun leaps and slams without dropping the form', () => {
+test('Boundman right-click morphs into Snakeman (keeps the form, not a reset)', () => {
+  const L = makeLuffy(0);
+  L.gearIndex = BOUND;
+  L.gauge = 9;
+  assert.equal(L.secondary(), true);
+  assert.equal(L.gearIndex, SNAKE, 'now Snakeman');
+  assert.equal(L.gear().name, 'Gear 4: Snakeman');
+});
+
+test('Boundman King Kong Gun leaps and slams (bazooka slot)', () => {
   const L = makeLuffy(2);
-  L.gearIndex = 2;
-  const ok = L.secondary();
-  assert.equal(ok, true);
-  assert.ok(L.player.velocity.y > 0, 'leaps into the air');
+  L.gearIndex = BOUND;
+  assert.equal(L.gear().slots.bazooka.behavior, 'kingkong');
+  assert.equal(L.useSkill('bazooka'), true);
+  assert.ok(L.player.velocity.y > 0, 'leaps');
   assert.ok(L.pendingSlam, 'a ground slam is queued');
-  assert.equal(L.gearIndex, 2, 'stays Boundman (only the Cañón resets)');
-  // The slam lands after its delay and deals AoE damage.
   for (let i = 0; i < 20 && L.pendingSlam; i += 1) L.update(0.05);
-  assert.equal(L.pendingSlam, null, 'the slam resolved');
+  assert.equal(L.pendingSlam, null, 'the slam resolves');
 });
 
-test('Boundman buffs the moveset and renames the slots (Kong Gun / Kong Gatling)', () => {
+test('Boundman renames the slots (Kong Gun / King Kong Gun / Kong Gatling)', () => {
   const L = makeLuffy(0);
-  const g1 = L.skillStats('pistol');
-  L.gearIndex = 2;
-  const bound = L.skillStats('pistol');
-  assert.ok(bound.damage > g1.damage, 'Kong Gun hits harder than Pistol');
-  assert.ok(bound.halfWidth > g1.halfWidth, 'Kong Gun has a wider hitbox');
-  assert.equal(L.currentLabels().pistol, 'Kong Gun');
-  assert.equal(L.currentLabels().gatling, 'Kong Gatling');
+  L.gearIndex = BOUND;
+  assert.deepEqual(L.currentLabels(), { pistol: 'Kong Gun', bazooka: 'King Kong Gun', gatling: 'Kong Gatling' });
+  const g1 = makeLuffy(0).slotStats('pistol');
+  const kong = L.slotStats('pistol');
+  assert.ok(kong.damage > g1.damage && kong.halfWidth > g1.halfWidth, 'Kong Gun hits harder + wider');
 });
 
-test('Snakeman and Gear 5 reuse the Gear-1 moveset', () => {
+test('Snakeman uses autoaim punches with long reach', () => {
   const L = makeLuffy(0);
-  for (const idx of [3, 4]) {
-    const g = L.cfg.gears[idx];
-    assert.equal(g.dmg, 1.0);
-    assert.equal(g.secondary, 'none');
-    assert.equal(g.labels.pistol, 'Pistol');
-  }
+  L.gearIndex = SNAKE;
+  assert.equal(L.gear().slots.pistol.behavior, 'autoaim');
+  assert.equal(L.gear().slots.bazooka.behavior, 'autoaim'); // King Cobra Gun
+  assert.deepEqual(L.currentLabels(), { pistol: 'Pistol (auto)', bazooka: 'King Cobra Gun', gatling: 'Black Mamba' });
+});
+
+test('Gear 5 jumps high / moves fast and has penetrate + skybeam + bajrang', () => {
+  const L = makeLuffy(0);
+  L.gearIndex = GEAR5;
+  assert.ok(L.speedMult > 1.2 && L.jumpMult > 1.2, 'fast + high jumps');
+  const s = L.gear().slots;
+  assert.equal(s.pistol.behavior, 'penetrate');
+  assert.equal(s.bazooka.behavior, 'skybeam');
+  assert.equal(s.gatling.behavior, 'bajrang');
+  // Bajrang Gun: a high leap + a big slam.
+  assert.equal(L.useSkill('gatling'), true);
+  assert.ok(L.player.velocity.y >= BALANCE.luffy.bajrang.jump - 0.001, 'leaps very high');
+});
+
+test('Gear 1, Snakeman and Gear 5 have no Cañón; only Gear 2 resets', () => {
+  assert.equal(BALANCE.luffy.gears[GEAR1].secondary, 'none');
+  assert.equal(BALANCE.luffy.gears[GEAR2].secondary, 'cannon');
+  assert.equal(BALANCE.luffy.gears[BOUND].secondary, 'toSnakeman');
+  assert.equal(BALANCE.luffy.gears[SNAKE].secondary, 'none');
+  assert.equal(BALANCE.luffy.gears[GEAR5].secondary, 'none');
 });

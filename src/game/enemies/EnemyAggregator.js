@@ -29,6 +29,19 @@ export function createEnemyAggregator({ dragons, zombies, skeletons, witches, wo
       return best ? bestMgr.applyRayHit(best, dmg) : null;
     },
     anyNear: (pos, radius) => lists().some((list) => list.some((e) => !e.dead && pos.distanceTo(e.mesh.position) < radius)),
+    // Nearest living enemy's position within maxDist (used by Luffy's autoaim).
+    nearestTo: (pos, maxDist = Infinity) => {
+      let best = null;
+      let bestD = maxDist;
+      for (const list of lists()) {
+        for (const e of list) {
+          if (e.dead) continue;
+          const d = pos.distanceTo(e.mesh.position);
+          if (d < bestD) { bestD = d; best = e.mesh.position; }
+        }
+      }
+      return best ? best.clone() : null;
+    },
     aliveCount: () => managers.reduce((sum, m) => sum + m.getAliveCount(), 0),
   };
 }
