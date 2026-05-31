@@ -1,0 +1,9 @@
+# Normalize line endings to LF on all platforms (avoids CRLF churn on Windows).
+* text=auto eol=lf
+
+# Binary assets must not be line-ending normalized.
+*.ttf binary
+*.png binary
+*.jpg binary
+*.zip binary
+*.mca binary
