@@ -41,9 +41,13 @@ Dos herramientas, pensadas para reusarse:
   con un overlay en vivo (FPS, ms medio, p95, % del frame; la fase mas cara se
   resalta en rojo). Esta **apagado por defecto**; para activarlo:
   - abre el juego con `?profile` en la URL, o
-  - pulsa **F3** dentro del juego (se recuerda entre recargas), o
+  - pulsa **L** dentro del juego para mostrar/ocultar el overlay (se recuerda entre recargas), o
   - desde consola: `voxelProfiler.toggle()` / `voxelProfiler.report()` (vuelca una
     tabla con `console.table`).
+
+  Con el overlay abierto: **↑/↓** selecciona una fase y **Enter** la oculta/restaura
+  *solo visualmente* (la simulacion sigue corriendo) — util para aislar el coste de,
+  p. ej., el HUD, los efectos o un tipo de enemigo.
 
 ## Controles
 

@@ -471,15 +471,31 @@ export class Game {
 
     this.updateTargetOutline();
     this.effects.applyCameraShake(this.camera);
+    this.applyVisualMutes();
     p.begin('hud');
     this.renderHud();
     p.end();
 
     p.begin('render');
-    this.renderer.render(this.scene, this.activeCamera);
+    if (!(p.enabled && p.isMuted('render'))) this.renderer.render(this.scene, this.activeCamera);
     p.end();
     this.input.update();
     p.endFrame();
+  }
+
+  // Profiler "visual mute": hide a phase's output (Enter in the overlay) while
+  // its simulation keeps running. Only takes effect while the profiler is on,
+  // so closing it (L) always restores every visual.
+  applyVisualMutes() {
+    const p = this.profiler;
+    const off = (label) => p.enabled && p.isMuted(label);
+    this.world.visible = !off('world');
+    this.dragons.group.visible = !off('dragons');
+    this.zombies.group.visible = !off('zombies');
+    this.skeletons.group.visible = !off('skeletons');
+    this.witches.group.visible = !off('witches');
+    this.effects.setVisible(!off('effects'));
+    if (this.hud?.root) this.hud.root.style.visibility = off('hud') ? 'hidden' : 'visible';
   }
 
   renderHud() {

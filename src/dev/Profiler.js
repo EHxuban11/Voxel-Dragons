@@ -39,6 +39,9 @@ function injectStyles() {
     }
     .vd-prof b { color: #5ad84a; }
     .vd-prof .hot { color: #ff6a6a; }
+    .vd-prof .sel { background: rgba(255, 209, 102, 0.22); color: #ffd166; }
+    .vd-prof .muted { color: #7a8694; text-decoration: line-through; }
+    .vd-prof .help { color: #6f7b88; }
   `;
   document.head.appendChild(style);
 }
@@ -49,14 +52,34 @@ export class Profiler {
     this.windowSize = windowSize;
     this.storageKey = storageKey;
     this.sections = new Map();          // label -> ring buffer state
-    this.order = [];                    // first-seen label order
+    this.order = [];                    // first-seen label order (navigation order)
+    this.selected = 0;                  // index into `order` for keyboard nav
+    this.muted = new Set();             // labels the game should hide (visual only)
     this._stack = [];
     this._frame = { ring: new Float32Array(windowSize), idx: 0, count: 0, t0: 0 };
     this._overlay = null;
     this._sinceRender = 0;
 
     this._onKey = (event) => {
-      if (event.code === 'F3') { event.preventDefault(); this.toggle(); }
+      if (event.code === 'KeyL') { event.preventDefault(); this.toggle(); return; }
+      if (!this.enabled || this.order.length === 0) return;
+      if (event.code === 'ArrowUp') {
+        event.preventDefault();
+        this.selected = (this.selected - 1 + this.order.length) % this.order.length;
+        this._renderOverlay();
+      } else if (event.code === 'ArrowDown') {
+        event.preventDefault();
+        this.selected = (this.selected + 1) % this.order.length;
+        this._renderOverlay();
+      } else if (event.code === 'Enter') {
+        event.preventDefault();
+        const label = this.order[this.selected];
+        if (label) {
+          if (this.muted.has(label)) this.muted.delete(label);
+          else this.muted.add(label);
+          this._renderOverlay();
+        }
+      }
     };
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this._onKey);
@@ -99,6 +122,9 @@ export class Profiler {
     if (f.count < this.windowSize) f.count += 1;
     if (this._overlay && (this._sinceRender += 1) >= 15) { this._sinceRender = 0; this._renderOverlay(); }
   }
+
+  // Whether the game should visually hide this phase (Enter in the overlay).
+  isMuted(label) { return this.muted.has(label); }
 
   // --- control ---------------------------------------------------------------
   enable() { this.setEnabled(true); }
@@ -153,6 +179,7 @@ export class Profiler {
     this._overlay.className = 'vd-prof';
     this._overlay.textContent = 'profiler…';
     document.body.appendChild(this._overlay);
+    this._renderOverlay();
   }
 
   _unmountOverlay() {
@@ -161,21 +188,28 @@ export class Profiler {
   }
 
   _renderOverlay() {
+    if (!this._overlay) return;
     const snap = this.snapshot();
     const frameAvg = snap.frame.avg || 0.0001;
-    const rows = snap.sections
-      .slice()
-      .sort((a, b) => b.avg - a.avg)
-      .map((s) => {
-        const share = (100 * s.avg / frameAvg);
-        const name = s.label.padEnd(12).slice(0, 12);
-        const line = `${name} ${s.avg.toFixed(2).padStart(6)} ${s.p95.toFixed(2).padStart(6)} ${share.toFixed(0).padStart(3)}%`;
-        return share >= 35 ? `<span class="hot">${line}</span>` : line;
-      });
+    const byLabel = new Map(snap.sections.map((s) => [s.label, s]));
+    // Stable insertion order so the ↑↓ cursor doesn't jump as timings change.
+    const lines = this.order.map((label, i) => {
+      const s = byLabel.get(label) || { avg: 0, p95: 0 };
+      const share = 100 * s.avg / frameAvg;
+      const cursor = i === this.selected ? '▶' : ' ';
+      const muted = this.muted.has(label);
+      const name = label.padEnd(11).slice(0, 11);
+      const body = `${cursor}${name} ${s.avg.toFixed(2).padStart(6)} ${share.toFixed(0).padStart(3)}% ${muted ? 'OFF' : '   '}`;
+      if (muted) return `<span class="muted">${body}</span>`;
+      if (i === this.selected) return `<span class="sel">${body}</span>`;
+      if (share >= 35) return `<span class="hot">${body}</span>`;
+      return body;
+    });
     this._overlay.innerHTML =
       `<b>FPS ${snap.fps.toFixed(0)}</b>  frame ${snap.frame.avg.toFixed(2)}ms (p95 ${snap.frame.p95.toFixed(2)})\n`
-      + `${'phase'.padEnd(12)} ${'avg'.padStart(6)} ${'p95'.padStart(6)} ${'sh'.padStart(4)}\n`
-      + rows.join('\n');
+      + `${' '.repeat(12)}${'avg'.padStart(6)} ${'sh'.padStart(4)}\n`
+      + lines.join('\n')
+      + `\n<span class="help">L cerrar  ↑↓ elegir  Enter ocultar/mostrar</span>`;
   }
 
   dispose() {

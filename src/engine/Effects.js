@@ -37,6 +37,13 @@ function disposeObject(object) {
 export class Effects {
   constructor(scene, options = {}) {
     this.scene = scene;
+    // Transient effect meshes live under one group so they can be hidden as a
+    // unit (the profiler's visual mute) without touching the simulation. Lights
+    // stay on the scene so toggling visibility never changes the light count
+    // (which would force a material recompile — the old FPS hitch).
+    this.group = new THREE.Group();
+    this.group.name = 'Effects';
+    if (scene) scene.add(this.group);
     this.effects = [];
     this.lights = [];
     // Fixed pool of point lights kept in the scene the whole time. Reusing them
@@ -139,7 +146,7 @@ export class Effects {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.copy(from);
     mesh.frustumCulled = false;
-    this.scene.add(mesh);
+    this.group.add(mesh);
 
     const travelTime = Math.max(0.03, distance / speed);
     const effect = {
@@ -180,7 +187,7 @@ export class Effects {
     mesh.position.copy(pos);
     mesh.frustumCulled = false;
     mesh.renderOrder = 1000;
-    this.scene.add(mesh);
+    this.group.add(mesh);
 
     const camera = this.camera;
     const roll = Math.random() * Math.PI * 2;
@@ -224,7 +231,7 @@ export class Effects {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.copy(pos);
     mesh.frustumCulled = false;
-    this.scene.add(mesh);
+    this.group.add(mesh);
 
     const ttl = 0.5;
     const effect = {
@@ -297,7 +304,7 @@ export class Effects {
     mesh.position.copy(from).addScaledVector(axis, 0.5);
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.clone().normalize());
     mesh.frustumCulled = false;
-    this.scene.add(mesh);
+    this.group.add(mesh);
 
     const ttl = 0.16;
     const effect = {
@@ -323,7 +330,7 @@ export class Effects {
       const effect = this.effects[i];
       const alive = effect.update(dt);
       if (!alive) {
-        this.scene?.remove?.(effect.object);
+        this.group.remove(effect.object);
         disposeObject(effect.object);
         this.effects.splice(i, 1);
       }
@@ -414,7 +421,7 @@ export class Effects {
     }
 
     for (const effect of this.effects) {
-      this.scene?.remove?.(effect.object);
+      this.group.remove(effect.object);
       disposeObject(effect.object);
     }
     this.effects.length = 0;
@@ -423,6 +430,12 @@ export class Effects {
       this.scene?.remove?.(entry.object);
     }
     this.lightPool.length = 0;
+    this.scene?.remove?.(this.group);
+  }
+
+  // Hide/show all transient effect meshes as a unit (profiler visual mute).
+  setVisible(visible) {
+    if (this.group) this.group.visible = visible;
   }
 
   _spawnBurst(config) {
@@ -467,7 +480,7 @@ export class Effects {
 
     const points = new THREE.Points(geometry, material);
     points.frustumCulled = false;
-    this.scene?.add?.(points);
+    this.group.add(points);
 
     const effect = {
       object: points,
@@ -510,7 +523,7 @@ export class Effects {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.copy(position);
     mesh.scale.setScalar(startScale);
-    this.scene?.add?.(mesh);
+    this.group.add(mesh);
 
     const effect = {
       object: mesh,
