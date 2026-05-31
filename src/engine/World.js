@@ -452,6 +452,12 @@ export class World extends THREE.Group {
     return surface === null ? 0 : surface + 1.02;
   }
 
+  // True if this column has open water on top (a lake/pond surface). Enemies use
+  // this to stay out of the water and avoid getting stuck below the surface.
+  isWaterColumn(x, z) {
+    return this.getBlock(x, this.options.waterLevel, z) === 'water';
+  }
+
   rebuildMeshes() {
     this.clearMeshes();
 

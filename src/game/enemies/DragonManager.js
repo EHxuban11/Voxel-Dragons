@@ -748,6 +748,19 @@ export class DragonManager {
     return this.dragons.filter((dragon) => !dragon.dead);
   }
 
+  // Glow every mesh red (or restore originals) — the "no-hit" threat marker.
+  setHighlighted(on, color = 0xff2020) {
+    for (const mat of Object.values(this.material)) {
+      if (!mat || !mat.emissive) continue;
+      if (mat.userData.baseEmissive === undefined) {
+        mat.userData.baseEmissive = mat.emissive.getHex();
+        mat.userData.baseEmissiveIntensity = mat.emissiveIntensity;
+      }
+      if (on) { mat.emissive.setHex(color); mat.emissiveIntensity = 0.85; }
+      else { mat.emissive.setHex(mat.userData.baseEmissive); mat.emissiveIntensity = mat.userData.baseEmissiveIntensity; }
+    }
+  }
+
   getAliveCount() {
     return this.getAliveDragons().length;
   }

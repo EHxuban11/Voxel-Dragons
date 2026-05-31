@@ -125,6 +125,16 @@ export class Game {
       witches: this.witches,
       world: this.world,
     });
+    // Any damage dealt through the aggregator (guns, bombs, aerial, mage spells)
+    // resets the "no-hit" threat timer. Melee resets it via applyMeleeHits.
+    for (const method of ['hitMelee', 'hitBox', 'hitByRay', 'hitAllByRay']) {
+      const original = this.enemies[method];
+      this.enemies[method] = (...args) => {
+        const result = original(...args);
+        if (Array.isArray(result) ? result.length : result) this.registerEnemyHit();
+        return result;
+      };
+    }
     this.enemyTargets = this.enemies; // weapons use hitByRay/hitAllByRay
 
     // Witches lob healing potions at the nearest wounded monster.
@@ -154,6 +164,11 @@ export class Game {
     this.dashCooldown = 0;
     this.swordCharging = false;
     this.swordCharge = 0;
+    // "No-hit" threat marker: after a stretch without damaging any enemy, every
+    // enemy glows red for a few seconds; landing a hit clears it.
+    this.timeSinceHit = 0;
+    this.threatTimer = 0;
+    this.enemiesHighlighted = false;
     this.viewmodel = null;
     this.viewmodelBasePos = new THREE.Vector3();
     this.viewmodelBaseRot = new THREE.Vector3();
@@ -585,6 +600,7 @@ export class Game {
       this.handlePlayerDeath();
     }
 
+    this.updateThreatHighlight(delta);
     this.updateTargetOutline();
     this.effects.applyCameraShake(this.camera);
     this.applyVisualMutes();
@@ -945,6 +961,33 @@ export class Game {
         this.audio.explosion();
       }
     }
+    if (groundHits.length || dragonHits.length) this.registerEnemyHit();
+  }
+
+  // --- "no-hit" threat marker -----------------------------------------------
+  registerEnemyHit() {
+    this.timeSinceHit = 0;
+    this.threatTimer = 0;
+    if (this.enemiesHighlighted) this.setEnemiesHighlighted(false);
+  }
+
+  setEnemiesHighlighted(on) {
+    if (this.enemiesHighlighted === on) return;
+    this.enemiesHighlighted = on;
+    for (const manager of this.enemies.managers) manager.setHighlighted?.(on, BALANCE.threat.color);
+  }
+
+  updateThreatHighlight(delta) {
+    if (this.threatTimer > 0) {
+      this.threatTimer -= delta;
+      if (this.threatTimer <= 0) { this.setEnemiesHighlighted(false); this.timeSinceHit = 0; }
+      return;
+    }
+    this.timeSinceHit += delta;
+    if (this.timeSinceHit >= BALANCE.threat.idleSeconds) {
+      this.setEnemiesHighlighted(true);
+      this.threatTimer = BALANCE.threat.highlightSeconds;
+    }
   }
 
   meleeAttack() {
@@ -967,6 +1010,7 @@ export class Game {
     const groundHits = [
       ...this.zombies.hitMelee(origin, direction, range, damage, arcCos),
       ...this.skeletons.hitMelee(origin, direction, range, damage, arcCos),
+      ...this.witches.hitMelee(origin, direction, range, damage, arcCos),
     ];
     const dragonHits = this.dragons.hitMelee(origin, direction, range, damage, arcCos);
     this.applyMeleeHits(groundHits, dragonHits, color, sizeMult);
@@ -1222,6 +1266,7 @@ export class Game {
     const groundHits = [
       ...this.zombies.hitMelee(origin, direction, sweepRange, damage, sweepArcCos),
       ...this.skeletons.hitMelee(origin, direction, sweepRange, damage, sweepArcCos),
+      ...this.witches.hitMelee(origin, direction, sweepRange, damage, sweepArcCos),
     ];
     const dragonHits = this.dragons.hitMelee(origin, direction, sweepRange, damage, sweepArcCos);
     this.applyMeleeHits(groundHits, dragonHits, 0x4aa0ff, 1.4);
@@ -1245,6 +1290,7 @@ export class Game {
     const groundHits = [
       ...this.zombies.hitMelee(origin, direction, aoeRadius, damage, -1),
       ...this.skeletons.hitMelee(origin, direction, aoeRadius, damage, -1),
+      ...this.witches.hitMelee(origin, direction, aoeRadius, damage, -1),
     ];
     const dragonHits = this.dragons.hitMelee(origin, direction, aoeRadius, damage, -1);
     this.applyMeleeHits(groundHits, dragonHits, 0xffffff, 1.2);

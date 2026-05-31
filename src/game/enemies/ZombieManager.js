@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { moveHorizontal, easeToGround } from '../../engine/Collision.js';
+import { moveHorizontal, easeToGround, steerToward } from '../../engine/Collision.js';
 
 const DEFAULT_BOUNDS = { minX: -22, maxX: 22, minZ: -22, maxZ: 22 };
 const ENEMY_RADIUS = 0.4;  // body half-width for wall collision
@@ -295,12 +295,16 @@ export class ZombieManager {
       }
 
       if (distance > this.attackRange) {
-        // Per-axis collision: walls block (so they don't sink into them) but the
-        // zombie slides along them instead of jamming; one-block steps pass.
         const speed = zombie.speed * speedFactor * dt;
-        moveHorizontal(world, zombie.mesh.position, this.tmpDir.x * speed, this.tmpDir.z * speed, ENEMY_RADIUS, ENEMY_HEIGHT);
+        const avoidWater = (cx, cz) => world?.isWaterColumn?.(cx, cz);
+        // Simple AI: if the straight line to the player is blocked, steer toward a
+        // nearby walkable heading so the zombie goes around obstacles (and water).
+        const dir = steerToward(world, zombie.mesh.position, this.tmpDir, ENEMY_RADIUS, ENEMY_HEIGHT, 1.1, avoidWater);
+        moveHorizontal(world, zombie.mesh.position, dir.x * speed, dir.z * speed, ENEMY_RADIUS, ENEMY_HEIGHT, 1.1, avoidWater);
         zombie.mesh.position.x = THREE.MathUtils.clamp(zombie.mesh.position.x, this.bounds.minX, this.bounds.maxX);
         zombie.mesh.position.z = THREE.MathUtils.clamp(zombie.mesh.position.z, this.bounds.minZ, this.bounds.maxZ);
+        // Face where it's actually heading (around the obstacle), not just the player.
+        if (dir !== this.tmpDir) zombie.mesh.rotation.y = Math.atan2(dir.x, dir.z);
       }
 
       // Smooth height change (stair-step) instead of snapping to the ground.
@@ -554,6 +558,19 @@ export class ZombieManager {
     this.dummy = null;
     this.dummyTimer = 0;
     this._lastDummyValue = -1;
+  }
+
+  // Glow every mesh red (or restore originals) — the "no-hit" threat marker.
+  setHighlighted(on, color = 0xff2020) {
+    for (const mat of Object.values(this.material)) {
+      if (!mat || !mat.emissive) continue;
+      if (mat.userData.baseEmissive === undefined) {
+        mat.userData.baseEmissive = mat.emissive.getHex();
+        mat.userData.baseEmissiveIntensity = mat.emissiveIntensity;
+      }
+      if (on) { mat.emissive.setHex(color); mat.emissiveIntensity = 0.85; }
+      else { mat.emissive.setHex(mat.userData.baseEmissive); mat.emissiveIntensity = mat.userData.baseEmissiveIntensity; }
+    }
   }
 
   getAliveCount() {

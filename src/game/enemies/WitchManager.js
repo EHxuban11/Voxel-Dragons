@@ -5,6 +5,16 @@ const DEFAULT_BOUNDS = { minX: -22, maxX: 22, minZ: -22, maxZ: 22 };
 const ENEMY_RADIUS = 0.4;
 const ENEMY_HEIGHT = 2;
 
+// Scale the model uniformly so it stands exactly this many blocks tall (the
+// witch's pointy hat is included in the bounding height).
+const MOB_HEIGHT = 2;
+function fitToHeight(group, target = MOB_HEIGHT) {
+  group.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(group);
+  const height = box.max.y - box.min.y;
+  if (height > 0.0001) group.scale.setScalar(target / height);
+}
+
 function getWorldPosition(target, fallback = new THREE.Vector3()) {
   if (!target) return fallback.set(0, 0, 0);
   if (target.isVector3) return fallback.copy(target);
@@ -118,6 +128,7 @@ export class WitchManager {
     witch.traverse((child) => {
       if (child.isMesh) child.userData.witchRoot = witch;
     });
+    fitToHeight(witch);
     return witch;
   }
 
@@ -178,7 +189,7 @@ export class WitchManager {
       if (move !== 0) {
         const stepX = this.tmpDir.x * witch.speed * speedFactor * dt * move;
         const stepZ = this.tmpDir.z * witch.speed * speedFactor * dt * move;
-        moveHorizontal(world, witch.mesh.position, stepX, stepZ, ENEMY_RADIUS, ENEMY_HEIGHT);
+        moveHorizontal(world, witch.mesh.position, stepX, stepZ, ENEMY_RADIUS, ENEMY_HEIGHT, 1.1, (cx, cz) => world?.isWaterColumn?.(cx, cz));
         witch.mesh.position.x = THREE.MathUtils.clamp(witch.mesh.position.x, this.bounds.minX, this.bounds.maxX);
         witch.mesh.position.z = THREE.MathUtils.clamp(witch.mesh.position.z, this.bounds.minZ, this.bounds.maxZ);
       }
@@ -433,6 +444,19 @@ export class WitchManager {
     const kills = this.kills;
     this.kills = 0;
     return kills;
+  }
+
+  // Glow every mesh red (or restore originals) — the "no-hit" threat marker.
+  setHighlighted(on, color = 0xff2020) {
+    for (const mat of Object.values(this.material)) {
+      if (!mat || !mat.emissive) continue;
+      if (mat.userData.baseEmissive === undefined) {
+        mat.userData.baseEmissive = mat.emissive.getHex();
+        mat.userData.baseEmissiveIntensity = mat.emissiveIntensity;
+      }
+      if (on) { mat.emissive.setHex(color); mat.emissiveIntensity = 0.85; }
+      else { mat.emissive.setHex(mat.userData.baseEmissive); mat.emissiveIntensity = mat.userData.baseEmissiveIntensity; }
+    }
   }
 
   getAliveCount() {

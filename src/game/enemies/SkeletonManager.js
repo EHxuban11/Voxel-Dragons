@@ -172,7 +172,7 @@ export class SkeletonManager {
       if (move !== 0) {
         const stepX = this.tmpDir.x * skeleton.speed * speedFactor * dt * move;
         const stepZ = this.tmpDir.z * skeleton.speed * speedFactor * dt * move;
-        moveHorizontal(world, skeleton.mesh.position, stepX, stepZ, ENEMY_RADIUS, ENEMY_HEIGHT);
+        moveHorizontal(world, skeleton.mesh.position, stepX, stepZ, ENEMY_RADIUS, ENEMY_HEIGHT, 1.1, (cx, cz) => world?.isWaterColumn?.(cx, cz));
         skeleton.mesh.position.x = THREE.MathUtils.clamp(skeleton.mesh.position.x, this.bounds.minX, this.bounds.maxX);
         skeleton.mesh.position.z = THREE.MathUtils.clamp(skeleton.mesh.position.z, this.bounds.minZ, this.bounds.maxZ);
       }
@@ -483,6 +483,19 @@ export class SkeletonManager {
     const kills = this.kills;
     this.kills = 0;
     return kills;
+  }
+
+  // Glow every mesh red (or restore originals) — the "no-hit" threat marker.
+  setHighlighted(on, color = 0xff2020) {
+    for (const mat of Object.values(this.material)) {
+      if (!mat || !mat.emissive) continue;
+      if (mat.userData.baseEmissive === undefined) {
+        mat.userData.baseEmissive = mat.emissive.getHex();
+        mat.userData.baseEmissiveIntensity = mat.emissiveIntensity;
+      }
+      if (on) { mat.emissive.setHex(color); mat.emissiveIntensity = 0.85; }
+      else { mat.emissive.setHex(mat.userData.baseEmissive); mat.emissiveIntensity = mat.userData.baseEmissiveIntensity; }
+    }
   }
 
   getAliveCount() {

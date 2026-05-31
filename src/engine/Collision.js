@@ -25,8 +25,10 @@ function wallBlocks(world, x, z, feetY, height, stepMax) {
 }
 
 // Resolves a horizontal move by (dx, dz), per-axis, against the actor's radius.
-// Mutates position.x / position.z. Returns { x, z }: whether each axis was blocked.
-export function moveHorizontal(world, position, dx, dz, radius, height, stepMax = 1.1) {
+// `avoid(cellX, cellZ)` (optional) marks a column impassable even if it isn't a
+// wall (used so enemies steer out of water). Mutates position.x / position.z.
+// Returns { x, z }: whether each axis was blocked.
+export function moveHorizontal(world, position, dx, dz, radius, height, stepMax = 1.1, avoid = null) {
   if (typeof world?.getBlock !== 'function') {
     position.x += dx;
     position.z += dz;
@@ -42,7 +44,8 @@ export function moveHorizontal(world, position, dx, dz, radius, height, stepMax 
     const edge = nx + Math.sign(dx) * radius; // the actor's leading face
     const blocked = wallBlocks(world, edge, position.z - radius, feetY, height, stepMax)
       || wallBlocks(world, edge, position.z, feetY, height, stepMax)
-      || wallBlocks(world, edge, position.z + radius, feetY, height, stepMax);
+      || wallBlocks(world, edge, position.z + radius, feetY, height, stepMax)
+      || (avoid && avoid(Math.floor(edge), Math.floor(position.z)));
     if (blocked) {
       const cell = Math.floor(edge);
       position.x = dx > 0 ? cell - radius - EPS : (cell + 1) + radius + EPS;
@@ -57,7 +60,8 @@ export function moveHorizontal(world, position, dx, dz, radius, height, stepMax 
     const edge = nz + Math.sign(dz) * radius;
     const blocked = wallBlocks(world, position.x - radius, edge, feetY, height, stepMax)
       || wallBlocks(world, position.x, edge, feetY, height, stepMax)
-      || wallBlocks(world, position.x + radius, edge, feetY, height, stepMax);
+      || wallBlocks(world, position.x + radius, edge, feetY, height, stepMax)
+      || (avoid && avoid(Math.floor(position.x), Math.floor(edge)));
     if (blocked) {
       const cell = Math.floor(edge);
       position.z = dz > 0 ? cell - radius - EPS : (cell + 1) + radius + EPS;
@@ -68,6 +72,32 @@ export function moveHorizontal(world, position, dx, dz, radius, height, stepMax 
   }
 
   return { x: blockedX, z: blockedZ };
+}
+
+// True if an actor of this radius/height can stand at column (x,z): no wall above
+// the step, and not avoided (e.g. water). Used by the zombie steering AI.
+export function canStandAt(world, x, z, feetY, radius, height, stepMax = 1.1, avoid = null) {
+  if (typeof world?.getBlock !== 'function') return true;
+  if (avoid && avoid(Math.floor(x), Math.floor(z))) return false;
+  return !wallBlocks(world, x, z, feetY, height, stepMax)
+    && (world.getGroundHeight(x, z) - feetY) <= stepMax + EPS;
+}
+
+// Simple steering: returns a heading near `desired` (a unit {x,z}) that the actor
+// can actually walk, so it goes around walls/water toward its goal instead of
+// jamming. Falls back to `desired` if nothing nearby is walkable.
+export function steerToward(world, position, desired, radius, height, stepMax = 1.1, avoid = null) {
+  const probe = radius + 0.7; // look a little past the body
+  const ok = (dx, dz) => canStandAt(world, position.x + dx * probe, position.z + dz * probe, position.y, radius, height, stepMax, avoid);
+  if (ok(desired.x, desired.z)) return desired;
+  const base = Math.atan2(desired.x, desired.z);
+  for (const deg of [25, -25, 50, -50, 75, -75, 95, -95]) {
+    const a = base + (deg * Math.PI) / 180;
+    const dx = Math.sin(a);
+    const dz = Math.cos(a);
+    if (ok(dx, dz)) return { x: dx, z: dz };
+  }
+  return desired;
 }
 
 // Eases position.y toward targetY instead of snapping, so stepping up/down a

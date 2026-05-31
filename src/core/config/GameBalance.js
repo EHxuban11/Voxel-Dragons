@@ -303,6 +303,14 @@ export const BALANCE = deepFreeze({
     dragon: 5,
   },
 
+  // After this long without damaging any enemy, every enemy glows red for a
+  // while so you can find them. Resets the moment you land a hit.
+  threat: {
+    idleSeconds: 10,
+    highlightSeconds: 5,
+    color: 0xff2020,
+  },
+
   shop: {
     items: [
       { id: 'damage', name: '+25% Daño', emoji: '⚔️', cost: 18 },
