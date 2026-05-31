@@ -1,4 +1,4 @@
-import { importMinecraftMap } from './maps/custom/importer.js';
+import { importMinecraftMap } from '../content/maps/custom/importer.js';
 import { getCharacterSprite, getMapSprite } from './Sprites.js';
 
 const STYLE_ID = 'voxel-dragons-menu-style';

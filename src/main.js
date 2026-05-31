@@ -1,8 +1,8 @@
 import './styles.css';
-import { Game } from './modules/Game.js';
-import { Menu } from './modules/Menu.js';
-import { CHARACTERS } from './modules/Characters.js';
-import { MAPS } from './modules/maps/index.js';
+import { Game } from './game/Game.js';
+import { Menu } from './ui/Menu.js';
+import { CHARACTERS } from './content/characters/Characters.js';
+import { MAPS } from './content/maps/index.js';
 
 const root = document.querySelector('#app');
 

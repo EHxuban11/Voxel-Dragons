@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createBlockMaterials } from './BlockTextures.js';
+import { createBlockMaterials } from './textures/BlockTextures.js';
 
 const BLOCK_SIZE = 1;
 const DEFAULT_OPTIONS = {

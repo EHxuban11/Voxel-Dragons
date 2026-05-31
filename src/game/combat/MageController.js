@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BALANCE } from './GameBalance.js';
+import { BALANCE } from '../../core/config/GameBalance.js';
 
 const ANY_DIR = new THREE.Vector3(1, 0, 0); // hitMelee with arcCos -1 ignores direction
 

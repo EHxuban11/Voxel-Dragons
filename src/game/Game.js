@@ -1,22 +1,22 @@
 import * as THREE from 'three';
-import { World } from './World.js';
+import { World } from '../engine/World.js';
 import { Player } from './Player.js';
-import { Weapons } from './Weapons.js';
-import { DragonManager } from './DragonManager.js';
-import { ZombieManager } from './ZombieManager.js';
-import { SkeletonManager } from './SkeletonManager.js';
-import { WitchManager } from './WitchManager.js';
-import { Input } from './Input.js';
-import { HUD } from './HUD.js';
-import { Effects } from './Effects.js';
-import { GameAudio } from './Audio.js';
+import { Weapons } from './combat/Weapons.js';
+import { DragonManager } from './enemies/DragonManager.js';
+import { ZombieManager } from './enemies/ZombieManager.js';
+import { SkeletonManager } from './enemies/SkeletonManager.js';
+import { WitchManager } from './enemies/WitchManager.js';
+import { Input } from '../platform/web/Input.js';
+import { HUD } from '../ui/HUD.js';
+import { Effects } from '../engine/Effects.js';
+import { GameAudio } from '../platform/web/Audio.js';
 import { Inventory } from './Inventory.js';
-import { CHARACTERS } from './Characters.js';
-import { MAPS } from './maps/index.js';
-import { buildViewmodel, disposeViewmodel } from './Viewmodels.js';
-import { Shop } from './Shop.js';
-import { MageController } from './MageController.js';
-import { BALANCE } from './GameBalance.js';
+import { CHARACTERS } from '../content/characters/Characters.js';
+import { MAPS } from '../content/maps/index.js';
+import { buildViewmodel, disposeViewmodel } from '../engine/Viewmodels.js';
+import { Shop } from '../ui/Shop.js';
+import { MageController } from './combat/MageController.js';
+import { BALANCE } from '../core/config/GameBalance.js';
 
 export class Game {
   constructor(root, options = {}) {
