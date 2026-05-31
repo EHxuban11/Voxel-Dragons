@@ -53,18 +53,29 @@ function regionOverlapsWindow(coords, win) {
   return !(rMinX + 511 < win.minX || rMinX > win.maxX || rMinZ + 511 < win.minZ || rMinZ > win.maxZ);
 }
 
-// Iterates every non-air block of the chosen regions that falls inside the XZ
-// window, calling cb(localX, localZ, mcY, blockName) with window-local X/Z.
-async function forEachWindowBlock(regions, win, cb) {
+// Decompress + parse each chunk ONCE, keeping only those overlapping the window.
+// Both passes (max-height, then placement) then reuse these parsed chunks instead
+// of re-inflating and re-parsing every chunk (the expensive zlib + NBT work).
+async function loadWindowChunks(regions, win) {
+  const chunks = [];
   for (const region of regions) {
     await eachChunk(region.bytes, region.coords[0], region.coords[1], (nbt, cx, cz) => {
       const bx = cx * 16;
       const bz = cz * 16;
       if (bx + 15 < win.minX || bx > win.maxX || bz + 15 < win.minZ || bz > win.maxZ) return;
-      extractBlocks(nbt, cx, cz, (x, y, z, name) => {
-        if (x < win.minX || x > win.maxX || z < win.minZ || z > win.maxZ) return;
-        cb(x - win.minX, z - win.minZ, y, name);
-      });
+      chunks.push({ nbt, cx, cz });
+    });
+  }
+  return chunks;
+}
+
+// Iterates every non-air block of the cached chunks that falls inside the XZ
+// window, calling cb(localX, localZ, mcY, blockName) with window-local X/Z.
+function forEachWindowBlock(chunks, win, cb) {
+  for (const { nbt, cx, cz } of chunks) {
+    extractBlocks(nbt, cx, cz, (x, y, z, name) => {
+      if (x < win.minX || x > win.maxX || z < win.minZ || z > win.maxZ) return;
+      cb(x - win.minX, z - win.minZ, y, name);
     });
   }
 }
@@ -93,10 +104,13 @@ export async function importMinecraftMap(file, onProgress = () => {}) {
   onProgress(`Descomprimiendo ${used.length} región(es)…`);
   for (const region of used) region.bytes = await zip.read(region.path);
 
+  // Decompress + parse the window's chunks once; both passes reuse them.
+  const chunks = await loadWindowChunks(used, win);
+
   // Pass 1: find the highest solid block so we keep the top layers of the build.
   onProgress('Analizando alturas…');
   let maxY = -Infinity;
-  await forEachWindowBlock(used, win, (_lx, _lz, my) => { if (my > maxY) maxY = my; });
+  forEachWindowBlock(chunks, win, (_lx, _lz, my) => { if (my > maxY) maxY = my; });
   if (maxY === -Infinity) throw new Error('La ventana del mapa está vacía (sin bloques).');
   const base = maxY - (DIMS.maxHeight - 1);
 
@@ -107,7 +121,7 @@ export async function importMinecraftMap(file, onProgress = () => {}) {
   const ys = [];
   const zs = [];
   const types = [];
-  await forEachWindowBlock(used, win, (lx, lz, my, name) => {
+  forEachWindowBlock(chunks, win, (lx, lz, my, name) => {
     const gameY = my - base;
     if (gameY < 1 || gameY >= DIMS.maxHeight) return; // y=0 is reserved for the floor
     xs.push(lx);
