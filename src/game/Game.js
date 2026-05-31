@@ -6,10 +6,8 @@ import { DragonManager } from './enemies/DragonManager.js';
 import { ZombieManager } from './enemies/ZombieManager.js';
 import { SkeletonManager } from './enemies/SkeletonManager.js';
 import { WitchManager } from './enemies/WitchManager.js';
-import { Input } from '../platform/web/Input.js';
 import { HUD } from '../ui/HUD.js';
 import { Effects } from '../engine/Effects.js';
-import { GameAudio } from '../platform/web/Audio.js';
 import { Inventory } from './Inventory.js';
 import { CHARACTERS } from '../content/characters/Characters.js';
 import { MAPS } from '../content/maps/index.js';
@@ -24,20 +22,21 @@ export class Game {
     this.character = options.character ?? CHARACTERS[0];
     this.map = options.map ?? MAPS[0];
     this.onExit = options.onExit ?? null;
-    this.clock = new THREE.Clock();
-    this.scene = new THREE.Scene();
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
-    this.root.appendChild(this.renderer.domElement);
 
-    this.camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 900);
+    // All host I/O is provided by the injected platform (renderer, loop, clock,
+    // viewport, input, audio). The game core never touches the browser directly.
+    this.platform = options.platform;
+    this.clock = this.platform.clock;
+    this.renderer = this.platform.renderer;
+    this.input = this.platform.input;
+    this.audio = this.platform.audio;
+    const viewport = this.platform.viewport;
+
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(72, viewport.width / viewport.height, 0.1, 900);
     this.activeCamera = this.camera;
-    this.aerialCamera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 900);
+    this.aerialCamera = new THREE.PerspectiveCamera(60, viewport.width / viewport.height, 0.1, 900);
     this.aerialCamera.up.set(0, 0, -1); // north stays up in the top-down view
-    this.input = new Input({ target: this.renderer.domElement });
-    this.audio = new GameAudio();
     this.effects = new Effects(this.scene);
     this.effects.camera = this.camera; // for camera-facing slash marks
     this.inventory = new Inventory(this.character);
@@ -281,7 +280,7 @@ export class Game {
   }
 
   bindEvents() {
-    window.addEventListener('resize', () => this.resize());
+    this.platform.viewport.onResize(() => this.resize());
     this.renderer.domElement.addEventListener('click', () => {
       this.audio.unlock();
       this.input.requestPointerLock();
@@ -291,7 +290,7 @@ export class Game {
   }
 
   start() {
-    this.renderer.setAnimationLoop(() => this.tick());
+    this.platform.loop.start(() => this.tick());
   }
 
   tick() {
@@ -1208,17 +1207,17 @@ export class Game {
   }
 
   resize() {
-    const aspect = window.innerWidth / window.innerHeight;
+    const vp = this.platform.viewport;
+    const aspect = vp.width / vp.height;
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
     this.aerialCamera.aspect = aspect;
     this.aerialCamera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(vp.width, vp.height);
   }
 
   dispose() {
-    this.renderer.setAnimationLoop(null);
-    this.input.dispose?.();
+    this.platform.loop.stop();
     this.hud.destroy?.();
     this.shop?.hide?.();
     this.removeAerialCircle();
@@ -1235,7 +1234,6 @@ export class Game {
       disposeViewmodel(this.viewmodel);
       this.viewmodel = null;
     }
-    this.renderer.domElement.remove();
-    this.renderer.dispose?.();
+    this.platform.dispose();
   }
 }
