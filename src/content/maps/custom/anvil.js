@@ -166,8 +166,10 @@ export async function eachChunk(regionBytes, regionX, regionZ, cb) {
   }
 }
 
-// Walks the sections of one chunk, calling onBlock(x, y, z, blockName) for every
-// non-air block (absolute world coordinates).
+// Walks the sections of one chunk, calling onBlock(x, y, z, blockName, props) for
+// every non-air block (absolute world coordinates). `props` is the palette
+// entry's block-state Properties (facing/half/type/…) or null — used by the
+// importer to pick slab/stair/layer geometry.
 export function extractBlocks(nbt, chunkX, chunkZ, onBlock) {
   const dataVersion = nbt.DataVersion ?? (nbt.Level && nbt.Level.DataVersion) ?? 0;
   const padded = dataVersion >= 2529; // 1.16+ uses non-spanning packing
@@ -189,16 +191,18 @@ export function extractBlocks(nbt, chunkX, chunkZ, onBlock) {
     if (!palette || palette.length === 0) continue;
 
     const names = palette.map((p) => stripNamespace(p && p.Name));
+    const props = palette.map((p) => (p && p.Properties) || null);
 
     // Single-entry palettes omit the data array: the whole section is that block.
     if (palette.length === 1 || !data || data.length === 0) {
       const name = names[0];
       if (isAir(name)) continue;
+      const prop = props[0];
       for (let i = 0; i < 4096; i += 1) {
         const x = i & 15;
         const z = (i >> 4) & 15;
         const y = (i >> 8) & 15;
-        onBlock(chunkX * 16 + x, sectionY * 16 + y, chunkZ * 16 + z, name);
+        onBlock(chunkX * 16 + x, sectionY * 16 + y, chunkZ * 16 + z, name, prop);
       }
       continue;
     }
@@ -206,12 +210,13 @@ export function extractBlocks(nbt, chunkX, chunkZ, onBlock) {
     const bits = Math.max(4, ceilLog2(palette.length));
     const indices = unpackIndices(data, bits, 4096, padded);
     for (let i = 0; i < 4096; i += 1) {
-      const name = names[indices[i]];
+      const idx = indices[i];
+      const name = names[idx];
       if (isAir(name)) continue;
       const x = i & 15;
       const z = (i >> 4) & 15;
       const y = (i >> 8) & 15;
-      onBlock(chunkX * 16 + x, sectionY * 16 + y, chunkZ * 16 + z, name);
+      onBlock(chunkX * 16 + x, sectionY * 16 + y, chunkZ * 16 + z, name, props[idx]);
     }
   }
 }

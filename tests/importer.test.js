@@ -61,16 +61,23 @@ test('imports a synthetic Minecraft world end-to-end', async () => {
 
   const map = await importMinecraftMap(file);
 
-  assert.equal(map.dimensions.width, 64);
-  assert.equal(map.dimensions.maxHeight, 48);
-  // slime_block has no game equivalent -> dynamic block tinted slime-green.
+  // The world is sized to the build's real extent: the two blocks span a 2x2x1
+  // box, so width/depth = 2 and one build layer (maxHeight = layer + floor).
+  assert.equal(map.dimensions.width, 2);
+  assert.equal(map.dimensions.depth, 2);
+  assert.equal(map.dimensions.maxHeight, 2);
+  // slime_block has no game equivalent -> dynamic block: translucent slime-green
+  // gel (real Minecraft colour + transparency).
   assert.ok(map.extraBlocks.mc_slime_block, 'slime should become a dynamic block');
-  assert.equal(map.extraBlocks.mc_slime_block.color, 0x7ac74f);
+  assert.equal(map.extraBlocks.mc_slime_block.color, 0x6fc05a);
+  assert.equal(map.extraBlocks.mc_slime_block.texture, 'gem');
+  assert.equal(map.extraBlocks.mc_slime_block.transparent, true);
 
-  // generate() must place a stone floor + the two clipped blocks (top layers kept -> y 47).
+  // generate() places a stone floor (y=0) + the two blocks at y=1, centred so the
+  // window's local (0,0)/(1,1) land at world (-1,-1)/(0,0) (halfW = halfD = 1).
   const world = makeStubWorld(map.dimensions);
   map.generate(world);
-  assert.equal(world.getBlock(0, 47, 0), 'stone');
-  assert.equal(world.getBlock(1, 47, 1), 'mc_slime_block');
+  assert.equal(world.getBlock(-1, 1, -1), 'stone');
+  assert.equal(world.getBlock(0, 1, 0), 'mc_slime_block');
   assert.equal(world.getBlock(0, 0, 0), 'stone'); // floor
 });

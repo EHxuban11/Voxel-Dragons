@@ -132,10 +132,20 @@ export class World extends THREE.Group {
     this.blockTypes = { ...BLOCK_TYPES, ...(options.extraBlocks ?? {}) };
     this.validTypes = new Set(Object.keys(this.blockTypes));
     this.blocks = new Map();
+    // Per-block non-cube render shape (imported slabs/stairs/carpets/fences).
+    // Keyed like `blocks`; absent ⇒ a full cube. Geometries below are baked in
+    // cell-local [0,1]³ space (origin at the block's corner).
+    this.shapes = new Map();
     this.meshes = new Map();
     this.time = 0;
 
     this.geometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+    this.shapeGeometries = {
+      slab_bottom: new THREE.BoxGeometry(1, 0.5, 1).translate(0.5, 0.25, 0.5),
+      slab_top: new THREE.BoxGeometry(1, 0.5, 1).translate(0.5, 0.75, 0.5),
+      layer: new THREE.BoxGeometry(1, 0.125, 1).translate(0.5, 0.0625, 0.5),
+      post: new THREE.BoxGeometry(0.4, 1, 0.4).translate(0.5, 0.5, 0.5),
+    };
     // Flat quad used for the water surface so adjacent water tiles merge into a
     // single seamless sheet instead of showing per-cube edges.
     this.waterGeometry = new THREE.PlaneGeometry(BLOCK_SIZE, BLOCK_SIZE);
@@ -149,6 +159,7 @@ export class World extends THREE.Group {
   generate() {
     this.clearMeshes();
     this.blocks.clear();
+    this.shapes.clear();
     this.flatTop = null;
 
     // The chosen map paints the terrain using the building primitives below.
@@ -200,6 +211,7 @@ export class World extends THREE.Group {
   generateFlat(top = 5) {
     this.clearMeshes();
     this.blocks.clear();
+    this.shapes.clear();
     this.flatTop = top;
 
     const { width, depth } = this.options;
@@ -266,7 +278,9 @@ export class World extends THREE.Group {
     const ix = Math.floor(x);
     const iz = Math.floor(z);
     for (let y = 0; y < this.options.maxHeight; y += 1) {
-      this.blocks.delete(blockKey(ix, y, iz));
+      const key = blockKey(ix, y, iz);
+      this.blocks.delete(key);
+      this.shapes.delete(key);
     }
   }
 
@@ -400,7 +414,7 @@ export class World extends THREE.Group {
     return this.blocks.get(blockKey(Math.floor(x), Math.floor(y), Math.floor(z))) ?? null;
   }
 
-  setBlock(x, y, z, type, rebuild = true) {
+  setBlock(x, y, z, type, rebuild = true, shape = 'cube') {
     const ix = Math.floor(x);
     const iy = Math.floor(y);
     const iz = Math.floor(z);
@@ -408,12 +422,15 @@ export class World extends THREE.Group {
 
     if (type === null || type === undefined) {
       const removed = this.blocks.delete(key);
+      this.shapes.delete(key);
       if (removed && rebuild) this.rebuildMeshes();
       return removed;
     }
 
     if (!this.validTypes.has(type) || iy < 0 || iy >= this.options.maxHeight) return false;
     this.blocks.set(key, type);
+    if (shape && shape !== 'cube' && this.shapeGeometries[shape]) this.shapes.set(key, shape);
+    else this.shapes.delete(key);
     if (rebuild) this.rebuildMeshes();
     return true;
   }
@@ -439,6 +456,7 @@ export class World extends THREE.Group {
     this.clearMeshes();
 
     const blocksByType = new Map(Object.keys(this.blockTypes).map((type) => [type, []]));
+    const shapedByKey = new Map(); // `${type}__${shape}` → positions (non-cube blocks)
     const waterTops = [];
     for (const [key, type] of this.blocks) {
       const [x, y, z] = parseBlockKey(key);
@@ -447,7 +465,17 @@ export class World extends THREE.Group {
         if (this.getBlock(x, y + 1, z) !== 'water') waterTops.push([x, y, z]);
         continue;
       }
-      if (this.isRenderableBlock(x, y, z, type)) {
+      const shape = this.shapes.get(key);
+      // Full cubes are culled when fully enclosed (truly invisible). Non-cube
+      // shapes don't fill their cell, so an enclosed slab/layer/post still shows
+      // through the partial-cell gap — always emit those.
+      if (!shape && !this.isRenderableBlock(x, y, z, type)) continue;
+      if (shape) {
+        const k = `${type}__${shape}`;
+        let arr = shapedByKey.get(k);
+        if (!arr) { arr = []; shapedByKey.set(k, arr); }
+        arr.push([x, y, z]);
+      } else {
         blocksByType.get(type)?.push([x, y, z]);
       }
     }
@@ -468,6 +496,27 @@ export class World extends THREE.Group {
 
       mesh.instanceMatrix.needsUpdate = true;
       this.meshes.set(type, mesh);
+      this.add(mesh);
+    }
+
+    // Non-cube shapes (slabs/stairs/carpets/fences): one InstancedMesh per
+    // (type, shape). Their geometry is baked in cell-local space, so instances
+    // translate to the block corner (x, y, z) rather than the centre.
+    for (const [k, positions] of shapedByKey) {
+      const sep = k.lastIndexOf('__');
+      const type = k.slice(0, sep);
+      const shape = k.slice(sep + 2);
+      const geometry = this.shapeGeometries[shape] ?? this.geometry;
+      const mesh = new THREE.InstancedMesh(geometry, this.materials.get(type), positions.length);
+      mesh.name = `World:${type}:${shape}`;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      positions.forEach(([x, y, z], index) => {
+        matrix.makeTranslation(x, y, z);
+        mesh.setMatrixAt(index, matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      this.meshes.set(k, mesh);
       this.add(mesh);
     }
 
@@ -513,12 +562,14 @@ export class World extends THREE.Group {
     this.clearMeshes();
     this.geometry.dispose();
     this.waterGeometry.dispose();
+    for (const g of Object.values(this.shapeGeometries)) g.dispose();
     for (const material of this.materials.values()) {
       if (Array.isArray(material)) material.forEach((m) => m.dispose());
       else material.dispose();
     }
     this.materials.clear();
     this.blocks.clear();
+    this.shapes.clear();
   }
 }
 

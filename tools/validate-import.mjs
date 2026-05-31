@@ -1,0 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { importMinecraftMap } from '../src/content/maps/custom/importer.js';
+const bytes = readFileSync('/tmp/voxel-showcase.zip');
+const file = { name: 'voxel-showcase.zip', arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+const map = await importMinecraftMap(file, (m) => process.stderr.write(`  · ${m}\n`));
+console.log('dimensions:', JSON.stringify(map.dimensions));
+console.log('note:', map.note);
+const extra = Object.keys(map.extraBlocks);
+console.log(`dynamic (unmapped) blocks: ${extra.length}`);
+console.log(extra.join(', '));
