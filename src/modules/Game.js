@@ -13,6 +13,7 @@ import { GameAudio } from './Audio.js';
 import { Inventory } from './Inventory.js';
 import { CHARACTERS } from './Characters.js';
 import { buildViewmodel, disposeViewmodel } from './Viewmodels.js';
+import { buildAvatar, buildNameTag } from './Avatars.js';
 import { Shop } from './Shop.js';
 import { MageController } from './MageController.js';
 import { BALANCE } from './GameBalance.js';
@@ -21,6 +22,7 @@ export class Game {
   constructor(root, options = {}) {
     this.root = root;
     this.character = options.character ?? CHARACTERS[0];
+    this.username = options.username ?? 'Jugador';
     this.onExit = options.onExit ?? null;
     this.clock = new THREE.Clock();
     this.scene = new THREE.Scene();
@@ -68,7 +70,8 @@ export class Game {
           if (hit.point) this.effects.impact(hit.point, hit.weapon?.flashColor ?? 0xcfd6df);
         },
         onBeam: (beam) => {
-          this.effects.beam(beam.origin, beam.end, beam.color);
+          // The blaster's penetrating laser is the only thing that emits a beam.
+          this.effects.beam(beam.origin, beam.end, beam.color, { mega: true });
         },
         onTracer: (tracer) => {
           this.effects.tracer(tracer.origin, tracer.end, tracer.color);
@@ -124,6 +127,19 @@ export class Game {
         return best ? bestMgr.applyRayHit(best, dmg) : null;
       },
       anyNear: (pos, radius) => lists().some((list) => list.some((e) => !e.dead && pos.distanceTo(e.mesh.position) < radius)),
+      // Like anyNear but tolerant on the vertical axis, so a level-flying
+      // projectile registers a hit anywhere along an enemy's body (their origin
+      // sits at the feet) instead of sailing over their head.
+      anyNearBody: (pos, radius, vertical = 2.6) => lists().some((list) => list.some((e) => {
+        if (e.dead) return false;
+        const ep = e.mesh.position;
+        const dx = pos.x - ep.x;
+        const dz = pos.z - ep.z;
+        if (dx * dx + dz * dz > radius * radius) return false;
+        const dy = pos.y - ep.y;
+        return dy > -1.6 && dy < vertical;
+      })),
+      hitCylinder: (c, r, dmg) => managers.flatMap((m) => m.hitCylinder(c, r, dmg)),
       aliveCount: () => managers.reduce((sum, m) => sum + m.getAliveCount(), 0),
     };
     this.enemyTargets = this.enemies; // weapons use hitByRay/hitAllByRay
@@ -141,6 +157,22 @@ export class Game {
     this.swordCharging = false;
     this.swordCharge = 0;
     this.viewmodel = null;
+    this.viewmodelBasePos = new THREE.Vector3();
+    this.viewmodelBaseRot = new THREE.Vector3();
+
+    // Weapon recoil: a transient pitch kick + viewmodel kickback that recovers
+    // each frame so it never permanently drifts the aim.
+    this.recoil = { pitch: 0, kickZ: 0, roll: 0 };
+    this._recoilAppliedPitch = 0;
+    // Melee swing: a one-shot sweep arc played when a sword/katana attacks.
+    this.swing = { active: false, time: 0, duration: 0.32, amount: 0, style: 'slash' };
+
+    // Blaster charge-up: zoom in + blue tint, then snap back and fire the laser.
+    this.blasterCharging = false;
+    this.blasterChargeTime = 0;
+    this.blasterChargeDuration = 0.45;
+    this.blasterFovBase = this.camera.fov;
+    this.blasterFovZoom = 46;
 
     // Hunter hotbar abilities.
     this.bombs = [];
@@ -165,6 +197,13 @@ export class Game {
     this.samuraiDashCharge = 0;
     this.samuraiAwaitRelease = false;
     this.altPrevHeld = false;
+    // Samurai second-ability + dash cooldowns and the travelling X cuts.
+    this.knockbackCd = 0;   // sheathed technique
+    this.xSlashCd = 0;      // drawn technique
+    this.samuraiDashCd = 0; // drawn right-click dash
+    this.samuraiSlashes = [];
+    this.timeSlowTimer = 0;
+    this.timeSlowFactor = 0.35;
 
     // Mage spells.
     this.mage = this.character.loadout === 'spells'
@@ -179,6 +218,18 @@ export class Game {
     this.victory = false;
     this.deathTimer = 0;
 
+    // 5s visible countdown between waves (skipped when P force-advances).
+    this.waveCountdown = null;
+    this.waveCountdownTotal = 5;
+
+    // After 10s without damaging any enemy, outline them in red through walls;
+    // once it triggers it stays on for the rest of the wave (latched).
+    this.noDamageTimer = 0;
+    this._lastEnemyHp = 0;
+    this.highlightLatched = false;
+    this.highlightGroup = null;
+    this.highlightPool = [];
+
     // The player cannot leave the map (invisible barrier at the edges).
     this.playerBounds = {
       minX: -BALANCE.world.width / 2 + 1,
@@ -191,6 +242,16 @@ export class Game {
 
     this.scene.add(this.world);
     this.scene.add(this.player.object);
+
+    // The player's own avatar + floating username. Hidden for the local player
+    // (you never see your own model in first person); this is the model other
+    // players would see, with the name tag above the head.
+    this.avatar = buildAvatar(this.character);
+    this.nameTag = buildNameTag(this.username);
+    this.avatar.add(this.nameTag);
+    this.avatar.visible = false;
+    this.player.object.add(this.avatar);
+
     this.scene.add(this.targetOutline);
     this.addBoundaryBarrier();
     this.setupScene();
@@ -245,6 +306,11 @@ export class Game {
     this.witches.spawnWave(Math.floor(w * 0.35), this.player, this.world);
     this.dragons.spawnWave(Math.max(1, Math.ceil(w * 0.3)));
     this.hud.showMessage(`Oleada ${this.wave}`, 1500);
+
+    // Restart the "idle" timer / latch that red-outlines the enemies.
+    this.noDamageTimer = 0;
+    this._lastEnemyHp = 0;
+    this.highlightLatched = false;
   }
 
   setupScene() {
@@ -278,11 +344,13 @@ export class Game {
 
   tick() {
     const rawDelta = this.clock.getDelta();
-    const delta = Math.min(rawDelta, 0.05);
+    let delta = Math.min(rawDelta, 0.05);
     if (rawDelta > 0) {
       const instant = 1 / rawDelta;
       this.fps = this.fps ? this.fps + (instant - this.fps) * 0.1 : instant; // smoothed
     }
+    // The samurai's drawn technique briefly slows gameplay for drama.
+    if (this.timeSlowTimer > 0) delta *= this.timeSlowFactor;
 
     // Death screen: everything is frozen; return to the menu after 3 seconds.
     if (this.state === 'dead') {
@@ -340,6 +408,9 @@ export class Game {
     this.guardCooldown = Math.max(0, this.guardCooldown - delta);
     this.dashCooldown = Math.max(0, this.dashCooldown - delta);
     this.aerialCooldown = Math.max(0, this.aerialCooldown - delta);
+    this.knockbackCd = Math.max(0, this.knockbackCd - delta);
+    this.xSlashCd = Math.max(0, this.xSlashCd - delta);
+    this.samuraiDashCd = Math.max(0, this.samuraiDashCd - delta);
     this.player.updateGuard(delta);
     this.updateSamuraiState(delta);
 
@@ -349,6 +420,10 @@ export class Game {
     }
     if (this.input.consume('interact')) {
       this.inventory.toggleOpen();
+    }
+    // G breaks the targeted block for ANY character (to free yourself if stuck).
+    if (this.input.consume('breakBlock')) {
+      this.breakTargetBlock();
     }
     if (this.input.consume('weaponNext')) {
       this.inventory.next();
@@ -381,11 +456,19 @@ export class Game {
         this.zombies.clearZombies();
         this.skeletons.clearSkeletons();
         this.witches.clearWitches();
+        this.waveCountdown = null; // P skips the countdown entirely
+        this.advanceWave();
       }
     }
 
+    // Strip the previous frame's recoil tilt so mouse-look acts on the true aim.
+    this.undoRecoil();
     this.player.update(delta, this.input, this.world);
     this.clampPlayerToBounds();
+    this.animateViewmodel(delta);
+    if (this.character.loadout === 'guns') this.updateBlasterCharge(delta);
+    else if (this.character.ability === 'samurai') this.updateTimeSlow(rawDelta);
+    this.updateSamuraiSlashes(delta);
     this.world.update(delta);
     if (this.mage) this.mage.update(delta); // before enemies so the tornado can lift them
     this.dragons.update(delta, this.player, this.scene);
@@ -402,9 +485,26 @@ export class Game {
       + this.skeletons.consumeKills() * BALANCE.coins.skeleton
       + this.witches.consumeKills() * BALANCE.coins.witch;
 
-    if (!this.victory && this.enemies.aliveCount() === 0) {
-      this.advanceWave();
+    // Between waves: a visible 5s countdown, then spawn the next wave. The final
+    // wave goes straight to victory (there is no next wave to count down to).
+    if (!this.victory && this.state === 'playing') {
+      if (this.enemies.aliveCount() === 0) {
+        if (this.wave >= BALANCE.progression.waveCount) {
+          this.advanceWave();
+        } else {
+          if (this.waveCountdown == null) this.waveCountdown = this.waveCountdownTotal;
+          this.waveCountdown -= delta;
+          if (this.waveCountdown <= 0) {
+            this.waveCountdown = null;
+            this.advanceWave();
+          }
+        }
+      } else {
+        this.waveCountdown = null;
+      }
     }
+
+    this.updateEnemyHighlight(delta);
     this.weapons.update(delta);
     this.updateBombs(delta);
     this.updateSlashPhase(delta);
@@ -482,6 +582,7 @@ export class Game {
       wave: this.wave,
       waveCount: BALANCE.progression.waveCount,
       fps: this.fps,
+      countdown: this.waveCountdown,
       inventory: this.inventory.snapshot(),
       locked: this.input.pointerLocked
     });
@@ -535,6 +636,7 @@ export class Game {
   }
 
   triggerGameOver() {
+    this.cancelBlasterCharge();
     this.state = 'dead';
     this.deathTimer = 3;
     this.hud.showDeathScreen();
@@ -549,6 +651,7 @@ export class Game {
   }
 
   openShop() {
+    this.cancelBlasterCharge();
     this.state = 'shop';
     this.input.exitPointerLock();
     this.shop = new Shop(this.root, {
@@ -598,6 +701,11 @@ export class Game {
   }
 
   handleFire() {
+    // The blaster doesn't fire instantly: it charges (zoom + blue tint) first.
+    if (this.weapons.currentWeapon?.id === 'blaster') {
+      this.startBlasterCharge();
+      return;
+    }
     const fired = this.weapons.fire({
       scene: this.scene,
       world: this.world,
@@ -606,8 +714,175 @@ export class Game {
       camera: this.camera
     });
     if (fired) {
+      this.addRecoil(this.weapons.currentWeapon?.id);
       this.audio.shoot(this.weapons.getCurrentWeaponName());
     }
+  }
+
+  addRecoil(weaponId) {
+    const presets = {
+      rifle: { pitch: 0.013, kickZ: 0.05, roll: 0.012 },
+      shotgun: { pitch: 0.055, kickZ: 0.16, roll: 0.03 },
+      blaster: { pitch: 0.07, kickZ: 0.22, roll: 0 },
+      pistol: { pitch: 0.022, kickZ: 0.06, roll: 0.016 },
+      dagger: { pitch: 0.012, kickZ: 0.04, roll: 0.02 },
+      staff: { pitch: 0.028, kickZ: 0.1, roll: 0.01 },
+      bomb: { pitch: 0.02, kickZ: 0.1, roll: 0.02 },
+    };
+    const p = presets[weaponId] ?? presets.rifle;
+    this.recoil.pitch += p.pitch;
+    this.recoil.kickZ += p.kickZ;
+    this.recoil.roll += (Math.random() - 0.5) * 2 * p.roll;
+  }
+
+  // A sword/katana sweep. amount scales the arc (charged attacks swing wider).
+  triggerSwing(amount = 1, style = 'slash') {
+    this.swing.active = true;
+    this.swing.time = 0;
+    this.swing.amount = amount;
+    this.swing.style = style;
+    this.swing.duration = style === 'power' ? 0.5 : 0.32;
+  }
+
+  undoRecoil() {
+    if (this._recoilAppliedPitch) {
+      this.player.pitchHolder.rotation.x -= this._recoilAppliedPitch;
+      this._recoilAppliedPitch = 0;
+    }
+  }
+
+  // Drives the held-weapon animation: recoil springs back, the melee swing arcs
+  // once, and the result is composed onto the viewmodel's rest pose.
+  animateViewmodel(delta) {
+    this.recoil.pitch *= Math.exp(-13 * delta);
+    this.recoil.kickZ *= Math.exp(-11 * delta);
+    this.recoil.roll *= Math.exp(-13 * delta);
+    if (this.recoil.pitch < 0.0003) this.recoil.pitch = 0;
+    if (Math.abs(this.recoil.kickZ) < 0.001) this.recoil.kickZ = 0;
+    if (Math.abs(this.recoil.roll) < 0.0003) this.recoil.roll = 0;
+
+    // Negative pitch rotation tilts the view upward (the recoil "kick").
+    this._recoilAppliedPitch = -this.recoil.pitch;
+    this.player.pitchHolder.rotation.x += this._recoilAppliedPitch;
+
+    if (this.swing.active) {
+      this.swing.time += delta;
+      if (this.swing.time >= this.swing.duration) this.swing.active = false;
+    }
+
+    const vm = this.viewmodel;
+    if (!vm) return;
+
+    let px = this.viewmodelBasePos.x;
+    let py = this.viewmodelBasePos.y;
+    let pz = this.viewmodelBasePos.z + this.recoil.kickZ;
+    let rx = this.viewmodelBaseRot.x + this.recoil.pitch * 1.6;
+    let ry = this.viewmodelBaseRot.y;
+    let rz = this.viewmodelBaseRot.z + this.recoil.roll;
+
+    if (this.swing.active) {
+      const t = Math.min(this.swing.time / this.swing.duration, 1);
+      const a = this.swing.amount;
+      if (this.swing.style === 'power') {
+        // Knockback technique: wind the blade to the right and back (charge),
+        // then drive it across to the left for a weighty, powerful strike.
+        if (t < 0.4) {
+          const w = t / 0.4;
+          ry += -1.0 * w * a;
+          pz += 0.18 * w * a;
+          rz += -0.35 * w * a;
+        } else {
+          const s = (t - 0.4) / 0.6;
+          const arc = Math.sin(s * Math.PI / 2);
+          ry += (-1.0 + 3.0 * arc) * a;
+          pz += (0.18 - 0.45 * arc) * a;
+          px += -0.28 * arc * a;
+          rz += (-0.35 + 0.8 * arc) * a;
+        }
+      } else {
+        // Basic horizontal slash: right -> left -> back to rest. Mostly yaw.
+        const arc = Math.sin(t * Math.PI);
+        ry += 1.8 * arc * a;
+        px += -0.22 * arc * a;
+        rz += 0.45 * arc * a;
+        rx += 0.12 * arc * a;
+        pz += -0.1 * arc * a;
+      }
+    }
+
+    vm.position.set(px, py, pz);
+    vm.rotation.set(rx, ry, rz);
+
+    // Drop the held bomb the instant the hunter runs out.
+    if (vm.userData?.heldBomb) {
+      const slot = this.inventory.selectedSlot;
+      vm.userData.heldBomb.visible = slot?.abilityId === 'bomb' && (slot.count ?? 0) > 0;
+    }
+  }
+
+  startBlasterCharge() {
+    if (this.blasterCharging) return;
+    const weapon = this.weapons.currentWeapon;
+    if (!weapon || weapon.cooldownRemaining > 0 || weapon.isReloading) return;
+    if (weapon.ammo <= 0) {
+      // Out of charge: let the weapon handle the empty click / auto-reload.
+      this.weapons.fire({ scene: this.scene, world: this.world, dragons: this.enemyTargets, camera: this.camera });
+      return;
+    }
+    this.blasterCharging = true;
+    this.blasterChargeTime = 0;
+    this.audio.reload(); // charging whirr stand-in
+  }
+
+  updateBlasterCharge(delta) {
+    // Drop the charge if the player swapped off the blaster mid-wind-up.
+    if (this.blasterCharging && this.weapons.currentWeapon?.id !== 'blaster') {
+      this.cancelBlasterCharge();
+    }
+
+    if (!this.blasterCharging) {
+      // Ease the FOV / tint back to normal after a shot or a cancel.
+      if (Math.abs(this.camera.fov - this.blasterFovBase) > 0.05) {
+        this.camera.fov += (this.blasterFovBase - this.camera.fov) * Math.min(1, delta * 16);
+        this.camera.updateProjectionMatrix();
+      }
+      return;
+    }
+
+    this.blasterChargeTime += delta;
+    const t = Math.min(this.blasterChargeTime / this.blasterChargeDuration, 1);
+    // Zoom in (ease-in) and tint the screen blue as the shot charges.
+    this.camera.fov = THREE.MathUtils.lerp(this.blasterFovBase, this.blasterFovZoom, t * t);
+    this.camera.updateProjectionMatrix();
+    this.hud.setTint(t * 0.55);
+
+    if (t >= 1) this.fireBlaster();
+  }
+
+  fireBlaster() {
+    this.blasterCharging = false;
+    this.blasterChargeTime = 0;
+    this.hud.setTint(0); // snap the tint off as the camera zooms back out
+    const fired = this.weapons.fire({
+      scene: this.scene,
+      world: this.world,
+      dragons: this.enemyTargets,
+      effects: this.effects,
+      camera: this.camera,
+    });
+    if (fired) {
+      this.addRecoil('blaster');
+      this.audio.shoot('Blaster');
+    }
+  }
+
+  cancelBlasterCharge() {
+    if (!this.blasterCharging) return;
+    this.blasterCharging = false;
+    this.blasterChargeTime = 0;
+    this.hud.setTint(0);
+    this.camera.fov = this.blasterFovBase;
+    this.camera.updateProjectionMatrix();
   }
 
   applyMeleeHits(groundHits, dragonHits, color = 0xffffff, sizeMult = 1) {
@@ -629,6 +904,7 @@ export class Game {
 
   meleeAttack() {
     if (this.meleeCooldown > 0) return;
+    this.triggerSwing(1);
 
     const katana = this.character.loadout === 'katana';
     const buffed = katana && this.samuraiBuffActive;
@@ -646,6 +922,7 @@ export class Game {
     const groundHits = [
       ...this.zombies.hitMelee(origin, direction, range, damage, arcCos),
       ...this.skeletons.hitMelee(origin, direction, range, damage, arcCos),
+      ...this.witches.hitMelee(origin, direction, range, damage, arcCos),
     ];
     const dragonHits = this.dragons.hitMelee(origin, direction, range, damage, arcCos);
     this.applyMeleeHits(groundHits, dragonHits, color, sizeMult);
@@ -675,35 +952,162 @@ export class Game {
     }
   }
 
-  handleSamuraiSecondary(delta) {
+  handleSamuraiSecondary() {
     const altHeld = this.input.pointerLocked && (this.input.isDown('Mouse2') || this.input.isDown('KeyF'));
     const altPressed = altHeld && !this.altPrevHeld;
-    const altReleased = !altHeld && this.altPrevHeld;
 
     if (!this.samuraiBuffActive) {
-      if (altPressed) {
-        this.samuraiParry(); // opens the window; the buff only triggers if hit
-        this.samuraiAwaitRelease = true;
-      }
-    } else if (this.samuraiAwaitRelease) {
-      if (altReleased) this.samuraiAwaitRelease = false;
-    } else if (altHeld) {
-      this.samuraiDashCharging = true;
-      this.samuraiDashCharge = Math.min(this.samuraiDashCharge + delta, BALANCE.katana.dashMaxCharge);
-      // At max charge it fires whether or not the button is still held.
-      if (this.samuraiDashCharge >= BALANCE.katana.dashMaxCharge) {
-        this.samuraiDash(this.samuraiDashCharge);
-        this.samuraiDashCharging = false;
-        this.samuraiDashCharge = 0;
-        this.samuraiAwaitRelease = true;
-      }
-    } else if (this.samuraiDashCharging) {
-      this.samuraiDash(this.samuraiDashCharge);
-      this.samuraiDashCharging = false;
-      this.samuraiDashCharge = 0;
+      // Sheathed: parry to unsheathe (the buff triggers if an attack lands).
+      if (altPressed) this.samuraiParry();
+    } else if (altPressed && this.samuraiDashCd <= 0) {
+      // Drawn: instant full-power dash on a 3s cooldown; stays unsheathed.
+      this.samuraiDashMax();
+      this.samuraiDashCd = 3;
     }
 
     this.altPrevHeld = altHeld;
+  }
+
+  // Full-power dash (no charging) that does NOT consume the unsheathe buff.
+  samuraiDashMax() {
+    const k = BALANCE.katana;
+    const length = k.dashMaxLength;
+    const halfWidth = k.dashMaxWidth / 2;
+    const damage = k.dashMaxDamage;
+
+    const origin = this.player.object.position.clone();
+    const forward = this.getForwardHorizontal();
+    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+
+    this.player.lastMoveDir.copy(forward);
+    this.player.startDash(length, k.dashSpeed);
+    this.enemies.hitBox(origin, forward, right, length, halfWidth, damage);
+
+    const slashes = Math.round(length * 4);
+    for (let i = 0; i < slashes; i += 1) {
+      const along = (i / slashes) * length + (Math.random() - 0.5);
+      const side = (Math.random() - 0.5) * 2 * halfWidth;
+      const pos = origin.clone()
+        .addScaledVector(forward, Math.max(0, along))
+        .addScaledVector(right, side);
+      pos.y += 0.6 + Math.random() * 1.8;
+      this.effects.slashMark(pos, 1.4 + Math.random() * 0.9, 0xffffff);
+    }
+    this.audio.explosion();
+  }
+
+  // The samurai's second ability (the Técnica slot): a knockback strike when
+  // sheathed, or the time-slow X cuts when drawn.
+  samuraiSpecial() {
+    if (this.samuraiBuffActive) this.samuraiXSlash();
+    else this.samuraiKnockbackStrike();
+  }
+
+  // Sheathed: a heavy frontal blow that knocks enemies back. Low damage (just
+  // enough to kill skeletons). 6s cooldown.
+  samuraiKnockbackStrike() {
+    if (this.knockbackCd > 0) return;
+    this.knockbackCd = 6;
+    this.triggerSwing(1.2, 'power'); // wind up right-and-back, then strike left
+
+    const origin = this.getCameraWorldPosition();
+    const direction = this.getLookDirection();
+    const range = 6;
+    const damage = 24; // kills skeletons (22), not zombies (30) or witches (26)
+    const groundHits = [
+      ...this.zombies.hitMelee(origin, direction, range, damage, 0.1),
+      ...this.skeletons.hitMelee(origin, direction, range, damage, 0.1),
+      ...this.witches.hitMelee(origin, direction, range, damage, 0.1),
+    ];
+    const dragonHits = this.dragons.hitMelee(origin, direction, range, damage, 0.1);
+    this.applyMeleeHits(groundHits, dragonHits, 0xffd166, 1.3);
+
+    const center = this.player.object.position.clone();
+    this.enemies.knockback(center, range, 5);
+    this.effects.shockwave(center, range, 0xffd166);
+    this.audio.explosion();
+  }
+
+  // Drawn: 0.3s time-slow (blue + zoom), then two forward-travelling X cuts.
+  // High damage, 30s cooldown, and it re-sheathes you.
+  samuraiXSlash() {
+    if (this.xSlashCd > 0) return;
+    this.xSlashCd = 30;
+
+    // Consume the buff (re-sheathe).
+    this.samuraiBuffActive = false;
+    this.samuraiBuffTimer = 0;
+    this.updateViewmodel();
+
+    this.timeSlowTimer = 0.3;
+    this.spawnXSlash();
+    this.audio.explosion();
+  }
+
+  spawnXSlash() {
+    const forward = this.getForwardHorizontal();
+    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+    const group = new THREE.Group();
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xbfe0ff,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    // Two crossed bars spanning a 5x5 area -> an X facing the travel direction.
+    for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(1, 7), material);
+      bar.rotation.z = angle;
+      group.add(bar);
+    }
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), forward);
+    const start = this.player.object.position.clone().addScaledVector(forward, 1.5);
+    start.y = this.player.object.position.y + 1.4;
+    group.position.copy(start);
+    group.frustumCulled = false;
+    this.scene.add(group);
+
+    this.samuraiSlashes.push({
+      group, forward, right, position: start.clone(), speed: 3, traveled: 0, maxTravel: 16, damage: 200,
+    });
+  }
+
+  updateSamuraiSlashes(delta) {
+    for (let i = this.samuraiSlashes.length - 1; i >= 0; i -= 1) {
+      const s = this.samuraiSlashes[i];
+      const step = s.speed * delta;
+      s.position.addScaledVector(s.forward, step);
+      s.traveled += step;
+      s.group.position.copy(s.position);
+
+      // 5-wide / 5-tall damage slab travelling forward; high damage one-shots.
+      const hits = this.enemies.hitBox(s.position, s.forward, s.right, 1, 2.5, s.damage);
+      for (const hit of hits) this.effects.slashMark(hit.position, 2.2, 0xbfe0ff);
+
+      if (s.traveled >= s.maxTravel) {
+        this.scene.remove(s.group);
+        s.group.traverse((c) => { c.geometry?.dispose?.(); if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose?.()); else c.material?.dispose?.(); });
+        this.samuraiSlashes.splice(i, 1);
+      }
+    }
+  }
+
+  updateTimeSlow(rawDelta) {
+    if (this.timeSlowTimer <= 0) return;
+    this.timeSlowTimer -= rawDelta;
+    const p = THREE.MathUtils.clamp(1 - this.timeSlowTimer / 0.3, 0, 1);
+    const wave = Math.sin(p * Math.PI); // 0 -> 1 -> 0: zoom/tint in, then out
+    this.camera.fov = THREE.MathUtils.lerp(this.blasterFovBase, 52, wave);
+    this.camera.updateProjectionMatrix();
+    this.hud.setTint(0.4 * wave);
+    if (this.timeSlowTimer <= 0) {
+      this.timeSlowTimer = 0;
+      this.camera.fov = this.blasterFovBase;
+      this.camera.updateProjectionMatrix();
+      this.hud.setTint(0);
+    }
   }
 
   // Opens the parry window. No buff yet — an enemy must connect within it.
@@ -776,6 +1180,7 @@ export class Game {
   }
 
   giantSweep() {
+    this.triggerSwing(1.3);
     const origin = this.getCameraWorldPosition();
     const direction = this.getLookDirection();
     const { sweepRange, sweepArcCos, sweepDamageMult } = BALANCE.sword;
@@ -784,6 +1189,7 @@ export class Game {
     const groundHits = [
       ...this.zombies.hitMelee(origin, direction, sweepRange, damage, sweepArcCos),
       ...this.skeletons.hitMelee(origin, direction, sweepRange, damage, sweepArcCos),
+      ...this.witches.hitMelee(origin, direction, sweepRange, damage, sweepArcCos),
     ];
     const dragonHits = this.dragons.hitMelee(origin, direction, sweepRange, damage, sweepArcCos);
     this.applyMeleeHits(groundHits, dragonHits, 0x4aa0ff, 1.4);
@@ -797,6 +1203,7 @@ export class Game {
   }
 
   circularAoe() {
+    this.triggerSwing(1.4);
     const origin = this.getCameraWorldPosition();
     const direction = this.getLookDirection();
     const { aoeRadius, aoeDamageMult } = BALANCE.sword;
@@ -806,6 +1213,7 @@ export class Game {
     const groundHits = [
       ...this.zombies.hitMelee(origin, direction, aoeRadius, damage, -1),
       ...this.skeletons.hitMelee(origin, direction, aoeRadius, damage, -1),
+      ...this.witches.hitMelee(origin, direction, aoeRadius, damage, -1),
     ];
     const dragonHits = this.dragons.hitMelee(origin, direction, aoeRadius, damage, -1);
     this.applyMeleeHits(groundHits, dragonHits, 0xffffff, 1.2);
@@ -893,12 +1301,34 @@ export class Game {
       else if (label.includes('blaster')) kind = 'blaster';
       else if (label.includes('pistola')) kind = 'pistol';
       else if (label.includes('daga')) kind = 'dagger';
+    } else if (slot?.kind === 'ability') {
+      // Mage holds the staff for every spell; the hunter holds the same dagger
+      // during the aerial ability and a bomb (or just the arm) for the bomb.
+      if (this.character.loadout === 'spells') kind = 'staff';
+      else if (slot.abilityId === 'aerial') kind = 'dagger';
+      else if (slot.abilityId === 'bomb') kind = 'bomb';
+      else if (slot.abilityId === 'samuraiSpecial') kind = this.samuraiBuffActive ? 'katana-drawn' : 'katana';
     }
 
-    const model = kind ? buildViewmodel(kind) : null;
+    const sleeveByLoadout = {
+      guns: 0xffd166,
+      sword: 0x9aa6b2,
+      dagger: 0x3f6b3a,
+      katana: 0xb33636,
+      spells: 0x6a3fb5,
+    };
+    const opts = {
+      sleeve: sleeveByLoadout[this.character.loadout] ?? 0x6d6d6d,
+      hasBomb: (slot?.count ?? 0) > 0,
+    };
+
+    const model = kind ? buildViewmodel(kind, opts) : null;
     if (model) {
       this.camera.add(model);
       this.viewmodel = model;
+      // Remember the rest pose so recoil/swing offsets are relative to it.
+      this.viewmodelBasePos.copy(model.position);
+      this.viewmodelBaseRot.set(model.rotation.x, model.rotation.y, model.rotation.z);
     }
   }
 
@@ -929,11 +1359,15 @@ export class Game {
       if ((slot.count ?? 0) > 0) {
         this.placeBomb();
         slot.count -= 1;
+        this.addRecoil('bomb');
+        this.updateViewmodel(); // refresh the held bomb (gone when count hits 0)
       }
     } else if (slot.abilityId === 'aerial') {
       this.activateAerial();
+    } else if (slot.abilityId === 'samuraiSpecial') {
+      this.samuraiSpecial();
     } else if (this.mage && BALANCE.mage.skills[slot.abilityId]) {
-      this.mage.tryCast(slot.abilityId);
+      if (this.mage.tryCast(slot.abilityId)) this.addRecoil('staff');
     }
   }
 
@@ -1051,8 +1485,9 @@ export class Game {
     this.aerialCooldown = BALANCE.aerial.cooldown;
     this.removeAerialCircle();
 
-    const dir = new THREE.Vector3(1, 0, 0);
-    this.enemies.hitMelee(this.aerialCenter, dir, BALANCE.aerial.radius, BALANCE.aerial.damage, -1);
+    // Damage fills a full vertical cylinder (catches flying enemies too); the
+    // slash visuals only flash along the ground.
+    this.enemies.hitCylinder(this.aerialCenter, BALANCE.aerial.radius, BALANCE.aerial.damage);
     this.audio.explosion();
     this.slashTimer = BALANCE.aerial.slashDuration;
   }
@@ -1065,10 +1500,22 @@ export class Game {
       const r = Math.sqrt(Math.random()) * BALANCE.aerial.radius;
       const pos = new THREE.Vector3(
         this.aerialCenter.x + Math.cos(angle) * r,
-        this.aerialCenter.y + 0.6 + Math.random() * 1.8,
+        // Slashes only flash along the ground, not up the cylinder.
+        this.aerialCenter.y + 0.15 + Math.random() * 0.4,
         this.aerialCenter.z + Math.sin(angle) * r,
       );
       this.effects.slashMark(pos, 1.4 + Math.random() * 0.9, 0xffffff);
+    }
+  }
+
+  // Any character can break the block they're looking at (bound to G) to dig
+  // out if they get boxed in. The duck recovers wood it breaks.
+  breakTargetBlock() {
+    const hit = this.world.raycastBlock(this.getCameraWorldPosition(), this.getLookDirection(), BALANCE.world.interactionRange);
+    if (!hit || hit.type === 'water') return;
+    if (this.world.removeBlock(hit)) {
+      this.effects.impact(hit.point, 0xffffff);
+      if (this.character.canPlaceBlocks && hit.type === 'wood') this.inventory.addBlock('wood');
     }
   }
 
@@ -1084,17 +1531,20 @@ export class Game {
 
   placeSelectedBlock() {
     if (!this.character.canPlaceBlocks) return;
-    if (!this.inventory.canPlaceSelected()) return;
+    // The duck places a block with F / right click no matter which weapon is
+    // equipped — pull straight from the block slot instead of the selected one.
+    const blockSlot = this.inventory.slots.find((slot) => slot.kind === 'block' && (slot.count ?? 0) > 0);
+    if (!blockSlot) return;
     const hit = this.world.raycastBlock(this.getCameraWorldPosition(), this.getLookDirection(), BALANCE.world.interactionRange);
     if (!hit) return;
-    const type = this.inventory.selectedSlot.type;
-    if (this.world.addBlock(hit, type)) {
-      this.inventory.consumeSelectedBlock();
-      this.effects.impact(hit.point, this.inventory.selectedSlot.color);
+    if (this.world.addBlock(hit, blockSlot.type)) {
+      blockSlot.count -= 1;
+      this.effects.impact(hit.point, blockSlot.color);
     }
   }
 
   respawnPlayer() {
+    this.cancelBlasterCharge();
     this.player.revive();
     this.player.setPosition(...this.world.getSpawnPoint().toArray());
     this.samuraiBuffActive = false;
@@ -1189,6 +1639,83 @@ export class Game {
     this.targetOutline.position.set(hit.position.x + 0.5, hit.position.y + 0.5, hit.position.z + 0.5);
   }
 
+  enemyHealthSum() {
+    let sum = 0;
+    const add = (list) => { for (const e of list) if (!e.dead && Number.isFinite(e.health)) sum += e.health; };
+    add(this.dragons.dragons);
+    add(this.zombies.zombies);
+    add(this.skeletons.skeletons);
+    add(this.witches.witches);
+    return sum;
+  }
+
+  // Tracks how long since the player last damaged an enemy (any drop in total
+  // enemy health) and, past 10s, outlines every enemy in red through walls.
+  updateEnemyHighlight(delta) {
+    const hpSum = this.enemyHealthSum();
+    // Before it triggers, dealing damage keeps resetting the idle timer. Once it
+    // fires it latches on until the wave is cleared.
+    if (!this.highlightLatched) {
+      if (hpSum < this._lastEnemyHp - 0.01) this.noDamageTimer = 0;
+      else this.noDamageTimer += delta;
+      if (this.noDamageTimer >= 10) this.highlightLatched = true;
+    }
+    this._lastEnemyHp = hpSum;
+
+    const active = this.highlightLatched && this.enemies.aliveCount() > 0;
+    this.renderEnemyOutlines(active);
+  }
+
+  renderEnemyOutlines(active) {
+    if (!active) {
+      if (this.highlightGroup) this.highlightGroup.visible = false;
+      return;
+    }
+    if (!this.highlightGroup) {
+      this.highlightGroup = new THREE.Group();
+      this.highlightGroup.name = 'EnemyHighlight';
+      this.scene.add(this.highlightGroup);
+    }
+    this.highlightGroup.visible = true;
+
+    const groups = [
+      { list: this.dragons.dragons, w: 4.5, h: 2.6, d: 5.5, yc: 0 },
+      { list: this.zombies.zombies, w: 1.2, h: 2.4, d: 1.2, yc: 1.1 },
+      { list: this.skeletons.skeletons, w: 1.1, h: 2.3, d: 1.1, yc: 1.05 },
+      { list: this.witches.witches, w: 1.2, h: 2.5, d: 1.2, yc: 1.1 },
+    ];
+    let idx = 0;
+    for (const g of groups) {
+      for (const e of g.list) {
+        if (e.dead) continue;
+        const outline = this.getHighlightOutline(idx);
+        idx += 1;
+        outline.visible = true;
+        outline.position.set(e.mesh.position.x, e.mesh.position.y + g.yc, e.mesh.position.z);
+        outline.scale.set(g.w, g.h, g.d);
+      }
+    }
+    for (let i = idx; i < this.highlightPool.length; i += 1) this.highlightPool[i].visible = false;
+  }
+
+  getHighlightOutline(i) {
+    if (this.highlightPool[i]) return this.highlightPool[i];
+    const geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+    const material = new THREE.LineBasicMaterial({
+      color: 0xff2030,
+      transparent: true,
+      opacity: 0.95,
+      depthTest: false, // visible through walls
+      depthWrite: false,
+    });
+    const seg = new THREE.LineSegments(geometry, material);
+    seg.renderOrder = 1003;
+    seg.frustumCulled = false;
+    this.highlightGroup.add(seg);
+    this.highlightPool[i] = seg;
+    return seg;
+  }
+
   resize() {
     const aspect = window.innerWidth / window.innerHeight;
     this.camera.aspect = aspect;
@@ -1207,11 +1734,25 @@ export class Game {
     this.mage?.dispose?.();
     for (const bomb of this.bombs) this.scene.remove(bomb.mesh);
     this.bombs.length = 0;
+    for (const s of this.samuraiSlashes) this.scene.remove(s.group);
+    this.samuraiSlashes.length = 0;
     this.dragons.dispose?.();
     this.zombies.dispose?.();
     this.skeletons.dispose?.();
     this.witches.dispose?.();
     this.world.dispose?.();
+    if (this.highlightGroup) {
+      this.scene.remove(this.highlightGroup);
+      for (const seg of this.highlightPool) { seg.geometry.dispose(); seg.material.dispose(); }
+      this.highlightPool.length = 0;
+      this.highlightGroup = null;
+    }
+    if (this.avatar) {
+      this.player.object.remove(this.avatar);
+      this.nameTag?.userData?.texture?.dispose?.();
+      disposeViewmodel(this.avatar);
+      this.avatar = null;
+    }
     if (this.viewmodel) {
       this.camera.remove(this.viewmodel);
       disposeViewmodel(this.viewmodel);

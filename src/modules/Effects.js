@@ -276,7 +276,10 @@ export class Effects {
     return texture;
   }
 
-  beam(start, end, color = 0x54d2ff) {
+  // An energy beam. Defaults to a slim bolt (used by the mage's thunder). The
+  // blaster passes `mega: true` for a white-hot core inside a wide coloured
+  // glow, light pouring out along its whole length, and a hefty screen shake.
+  beam(start, end, color = 0x54d2ff, options = {}) {
     if (!this.scene) return;
 
     const from = resolvePosition(start);
@@ -284,36 +287,73 @@ export class Effects {
     const axis = to.clone().sub(from);
     const length = axis.length();
     if (length < 0.001) return;
+    const dir = axis.clone().normalize();
+    const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
 
-    const geometry = new THREE.CylinderGeometry(0.07, 0.07, length, 8, 1, true);
-    const material = new THREE.MeshBasicMaterial({
-      color,
+    const mega = Boolean(options.mega);
+    const coreRadius = options.coreRadius ?? (mega ? 0.18 : 0.07);
+    const glowRadius = options.glowRadius ?? (mega ? 0.55 : 0);
+    const ttl = options.ttl ?? (mega ? 0.22 : 0.16);
+
+    const group = new THREE.Group();
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: mega ? 0xffffff : color,
       transparent: true,
-      opacity: 0.9,
+      opacity: mega ? 0.95 : 0.9,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.copy(from).addScaledVector(axis, 0.5);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.clone().normalize());
-    mesh.frustumCulled = false;
-    this.scene.add(mesh);
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(coreRadius, coreRadius, length, mega ? 10 : 8, 1, true), coreMat);
+    group.add(core);
 
-    const ttl = 0.16;
+    let glowMat = null;
+    if (glowRadius > 0) {
+      glowMat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.5,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      group.add(new THREE.Mesh(new THREE.CylinderGeometry(glowRadius, glowRadius, length, 12, 1, true), glowMat));
+    }
+
+    group.position.copy(from).addScaledVector(axis, 0.5);
+    group.quaternion.copy(quat);
+    group.frustumCulled = false;
+    this.scene.add(group);
+
+    const baseCore = coreMat.opacity;
     const effect = {
-      object: mesh,
+      object: group,
       age: 0,
       ttl,
       update: (delta) => {
         effect.age += delta;
         const progress = THREE.MathUtils.clamp(effect.age / ttl, 0, 1);
-        material.opacity = 0.9 * (1 - progress);
+        coreMat.opacity = baseCore * (1 - progress);
+        if (glowMat) glowMat.opacity = 0.5 * (1 - progress);
+        if (mega) {
+          const swell = 1 + progress * 0.7; // beam blooms outward as it fades
+          group.scale.set(swell, 1, swell);
+        }
         return progress < 1;
       },
     };
 
     this.effects.push(effect);
-    this._addLight(to, color, 4, 9, 0.18);
+
+    if (mega) {
+      // Light pours out along the whole beam, not just the impact point.
+      const mid = from.clone().addScaledVector(axis, 0.5);
+      this._addLight(from, color, 10, 18, ttl);
+      this._addLight(mid, color, 11, 24, ttl);
+      this._addLight(to, color, 10, 18, ttl);
+      this._addShake(0.34, 0.42);
+    } else {
+      this._addLight(to, color, 4, 9, 0.18);
+    }
   }
 
   update(delta) {

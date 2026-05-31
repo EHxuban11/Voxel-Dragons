@@ -4,6 +4,7 @@ const DEFAULT_BINDINGS = {
   KeyI: 'interact',
   KeyF: 'alternate',
   KeyQ: 'drop',
+  KeyG: 'breakBlock',
   KeyR: 'reload',
   KeyP: 'debugSkipWave',
   ShiftLeft: 'sprint',

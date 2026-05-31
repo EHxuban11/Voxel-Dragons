@@ -160,13 +160,25 @@ export class SkeletonManager {
         const stepZ = this.tmpDir.z * skeleton.speed * speedFactor * dt * move;
         const nextX = THREE.MathUtils.clamp(skeleton.mesh.position.x + stepX, this.bounds.minX, this.bounds.maxX);
         const nextZ = THREE.MathUtils.clamp(skeleton.mesh.position.z + stepZ, this.bounds.minZ, this.bounds.maxZ);
-        if (groundHeight(world, nextX, nextZ) - skeleton.mesh.position.y <= 1.1) {
+        const y = skeleton.mesh.position.y;
+        const edgeX = nextX + Math.sign(nextX - skeleton.mesh.position.x) * 0.4;
+        const edgeZ = nextZ + Math.sign(nextZ - skeleton.mesh.position.z) * 0.4;
+        if (groundHeight(world, nextX, nextZ) - y <= 1.1 && groundHeight(world, edgeX, edgeZ) - y <= 1.1
+          && !world?.isWater?.(nextX, nextZ) && !world?.isWater?.(edgeX, edgeZ)) {
           skeleton.mesh.position.x = nextX;
           skeleton.mesh.position.z = nextZ;
         }
       }
 
-      skeleton.mesh.position.y = groundHeight(world, skeleton.mesh.position.x, skeleton.mesh.position.z);
+      const gy = groundHeight(world, skeleton.mesh.position.x, skeleton.mesh.position.z);
+      if (skeleton.mesh.position.y > gy + 0.05) {
+        skeleton.vy = (skeleton.vy ?? 0) - 22 * dt;
+        skeleton.mesh.position.y += skeleton.vy * dt;
+        if (skeleton.mesh.position.y <= gy) { skeleton.mesh.position.y = gy; skeleton.vy = 0; }
+      } else {
+        skeleton.mesh.position.y = gy;
+        skeleton.vy = 0;
+      }
 
       skeleton.shootTimer -= dt;
       if (distance <= this.shootRange && skeleton.shootTimer <= 0) {
@@ -360,6 +372,19 @@ export class SkeletonManager {
       if (distance > range || distance < 0.0001) continue;
       this.tmpDir.normalize();
       if (this.tmpDir.dot(direction) < arcCos) continue;
+      const killed = this.damageSkeleton(skeleton, damage);
+      results.push({ position: skeleton.mesh.position.clone(), killed });
+    }
+    return results;
+  }
+
+  hitCylinder(center, radius, damage) {
+    const results = [];
+    for (const skeleton of this.skeletons) {
+      if (skeleton.dead) continue;
+      const dx = skeleton.mesh.position.x - center.x;
+      const dz = skeleton.mesh.position.z - center.z;
+      if (Math.hypot(dx, dz) > radius) continue;
       const killed = this.damageSkeleton(skeleton, damage);
       results.push({ position: skeleton.mesh.position.clone(), killed });
     }

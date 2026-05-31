@@ -139,6 +139,32 @@ function injectStyles() {
       margin-left: 6px;
     }
 
+    .vd-countdown {
+      position: absolute;
+      left: 50%;
+      top: 52px;
+      transform: translateX(-50%);
+      display: none;
+      padding: 8px 18px;
+      text-align: center;
+      white-space: nowrap;
+      background: rgba(10, 14, 18, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 8px;
+      color: #ffe066;
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      text-shadow: 0 2px 0 rgba(0, 0, 0, 0.6);
+    }
+
+    .vd-countdown.is-active { display: block; }
+
+    .vd-countdown .vd-count-num {
+      color: #8be36a;
+      font-size: 26px;
+    }
+
     .vd-wavebar {
       position: absolute;
       left: 50%;
@@ -319,6 +345,16 @@ function injectStyles() {
     .vd-vignette.is-active {
       opacity: 1;
       transition: opacity 45ms ease-out;
+    }
+
+    .vd-tint {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at center, rgba(120, 200, 255, 0.05) 24%, rgba(40, 120, 255, 0.62) 100%),
+        rgba(60, 150, 255, 0.18);
     }
 
     .vd-hotbar {
@@ -551,11 +587,13 @@ export class HUD {
     this.root.setAttribute('aria-hidden', 'true');
     this.root.innerHTML = `
       <div class="vd-vignette"></div>
+      <div class="vd-tint" data-hud="tint"></div>
       <div class="vd-crosshair"></div>
       <div class="vd-guard" data-hud="guard">🛡️</div>
       <div class="vd-help">WASD mover | Espacio saltar | E o clic izq atacar | F o clic der habilidad | I inventario</div>
       <div class="vd-fps" data-hud="fps">0 FPS</div>
       <div class="vd-wavebar" data-hud="wavebar"></div>
+      <div class="vd-countdown" data-hud="countdown"></div>
       <div class="vd-top-right">
         <div class="vd-topline"><span class="vd-heart" data-hud="heart">❤️</span><span class="vd-coins">🪙 <span data-hud="coins">0</span></span></div>
         Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span><br>Esqueletos: <span data-hud="skeletons">0</span><br>Brujas: <span data-hud="witches">0</span>
@@ -581,6 +619,7 @@ export class HUD {
 
     this.nodes = {
       vignette: this.root.querySelector('.vd-vignette'),
+      tint: this.root.querySelector('[data-hud="tint"]'),
       guard: this.root.querySelector('[data-hud="guard"]'),
       shieldName: this.root.querySelector('[data-hud="shieldName"]'),
       shield: this.root.querySelector('[data-hud="shield"]'),
@@ -597,6 +636,7 @@ export class HUD {
       coins: this.root.querySelector('[data-hud="coins"]'),
       heart: this.root.querySelector('[data-hud="heart"]'),
       wavebar: this.root.querySelector('[data-hud="wavebar"]'),
+      countdown: this.root.querySelector('[data-hud="countdown"]'),
       deathscreen: this.root.querySelector('[data-hud="deathscreen"]'),
       message: this.root.querySelector('[data-hud="message"]'),
       hotbar: this.root.querySelector('[data-hud="hotbar"]'),
@@ -657,6 +697,16 @@ export class HUD {
       cell.classList.toggle('is-current', cellWave === wave);
       cell.classList.toggle('is-done', cellWave < wave);
     }
+    const countdown = nextState.countdown;
+    if (this.nodes.countdown) {
+      if (typeof countdown === 'number' && countdown > 0) {
+        this.nodes.countdown.classList.add('is-active');
+        this.nodes.countdown.innerHTML = `Siguiente oleada en <span class="vd-count-num">${Math.ceil(countdown)}</span>`;
+      } else {
+        this.nodes.countdown.classList.remove('is-active');
+      }
+    }
+
     this.renderInventory(nextState.inventory);
   }
 
@@ -700,6 +750,12 @@ export class HUD {
         this.nodes.message.classList.remove('is-visible');
       }, ms);
     }
+  }
+
+  // Blue full-screen tint for the blaster's charge-up (0 = clear, 1 = full).
+  setTint(alpha = 0) {
+    if (!this.nodes.tint) return;
+    this.nodes.tint.style.opacity = String(Math.max(0, Math.min(1, alpha)));
   }
 
   flashDamage() {

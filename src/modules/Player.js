@@ -298,12 +298,18 @@ export class Player {
     // Walls taller than one block stop horizontal movement (a single-block
     // step is allowed and is climbed by the vertical resolve). Per-axis so you
     // can still slide along a wall.
+    // Stop a body-radius short of the wall (checking the leading edge, not the
+    // centre) so the first-person camera never slides its near plane into a
+    // block. Per-axis so you can still slide along a wall.
     const pos = this.cameraHolder.position;
-    if (this.velocity.x !== 0 && this.isClimbBlocked(world, pos.x + this.velocity.x * delta, pos.z)) {
-      this.velocity.x = 0;
+    const r = this.config.radius ?? 0.35;
+    if (this.velocity.x !== 0) {
+      const edgeX = pos.x + Math.sign(this.velocity.x) * r + this.velocity.x * delta;
+      if (this.isClimbBlocked(world, edgeX, pos.z)) this.velocity.x = 0;
     }
-    if (this.velocity.z !== 0 && this.isClimbBlocked(world, pos.x, pos.z + this.velocity.z * delta)) {
-      this.velocity.z = 0;
+    if (this.velocity.z !== 0) {
+      const edgeZ = pos.z + Math.sign(this.velocity.z) * r + this.velocity.z * delta;
+      if (this.isClimbBlocked(world, pos.x, edgeZ)) this.velocity.z = 0;
     }
 
     pos.addScaledVector(this.velocity, delta);

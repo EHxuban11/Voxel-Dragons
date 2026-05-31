@@ -608,6 +608,21 @@ export class DragonManager {
     return results;
   }
 
+  hitCylinder(center, radius, damage) {
+    const results = [];
+    for (const dragon of this.dragons) {
+      if (dragon.dead) continue;
+      const dx = dragon.mesh.position.x - center.x;
+      const dz = dragon.mesh.position.z - center.z;
+      if (Math.hypot(dx, dz) > radius) continue;
+      dragon.health = Math.max(0, dragon.health - damage);
+      const killed = dragon.health <= 0;
+      if (killed) this.killDragon(dragon);
+      results.push({ position: dragon.mesh.position.clone(), killed });
+    }
+    return results;
+  }
+
   hitAllByRay(ray, damage = 25) {
     if (!ray) return [];
 

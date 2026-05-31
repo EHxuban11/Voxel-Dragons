@@ -1,3 +1,5 @@
+import { getCharacterArt } from './CharacterArt.js';
+
 const STYLE_ID = 'voxel-dragons-menu-style';
 
 function injectStyles() {
@@ -70,23 +72,21 @@ function injectStyles() {
       box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
     }
 
-    .vd-char-emoji {
-      font-size: 52px;
-      line-height: 1;
+    .vd-char-art {
+      width: 84px;
+      height: 84px;
+      margin: 0 auto;
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: 100% 100%;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.45));
     }
 
     .vd-char-name {
-      margin-top: 10px;
+      margin-top: 12px;
       font-size: 18px;
       font-weight: 800;
-    }
-
-    .vd-char-note {
-      margin-top: 6px;
-      font-size: 12px;
-      font-weight: 600;
-      color: rgba(231, 246, 255, 0.7);
-      min-height: 30px;
     }
 
     .vd-menu-start {
@@ -108,17 +108,53 @@ function injectStyles() {
       transform: translateY(4px);
       box-shadow: 0 2px 0 #2f6e1d, 0 6px 14px rgba(0, 0, 0, 0.4);
     }
+
+    .vd-name-input {
+      width: min(320px, 80vw);
+      padding: 14px 16px;
+      font-size: 20px;
+      font-weight: 700;
+      text-align: center;
+      color: #f7fbff;
+      background: rgba(20, 28, 38, 0.82);
+      border: 3px solid rgba(255, 255, 255, 0.22);
+      border-radius: 10px;
+      outline: none;
+    }
+
+    .vd-name-input:focus {
+      border-color: #ffd166;
+    }
   `;
   document.head.appendChild(style);
 }
 
-const CHARACTER_NOTES = {
-  duck: 'Armas + puede construir bloques',
-  knight: 'Espada y guardia que repele',
-  hunter: 'Dagas, bombas y vista aérea',
-  samurai: 'Katana con parry y dash potenciado',
-  mage: 'Frágil pero con 5 hechizos de maná',
-};
+// Asks for the player's username before character selection. Resolves with the
+// trimmed name (or a default if left blank).
+export function promptUsername(container, onSubmit) {
+  injectStyles();
+  const root = document.createElement('div');
+  root.className = 'vd-menu';
+  root.innerHTML = `
+    <h1 class="vd-menu-title">Voxel Dragons</h1>
+    <p class="vd-menu-subtitle">¿Cuál es tu nombre de usuario?</p>
+    <input class="vd-name-input" data-menu="name" maxlength="16" placeholder="Jugador" />
+    <button class="vd-menu-start" data-menu="confirm">Continuar</button>
+  `;
+  container.appendChild(root);
+
+  const input = root.querySelector('[data-menu="name"]');
+  const confirm = () => {
+    const name = (input.value || '').trim() || 'Jugador';
+    root.remove();
+    onSubmit?.(name);
+  };
+  root.querySelector('[data-menu="confirm"]').addEventListener('click', confirm);
+  input.addEventListener('keydown', (event) => { if (event.key === 'Enter') confirm(); });
+  setTimeout(() => input.focus(), 0);
+
+  return root;
+}
 
 export class Menu {
   constructor(container, characters, onStart) {
@@ -151,9 +187,8 @@ export class Menu {
   renderCharacters() {
     this.charactersNode.innerHTML = this.characters.map((character) => `
       <div class="vd-char-card ${character.id === this.selectedId ? 'is-selected' : ''}" data-char="${character.id}">
-        <div class="vd-char-emoji">${character.emoji}</div>
+        <div class="vd-char-art" style="background-image:url(${getCharacterArt(character.id)})"></div>
         <div class="vd-char-name">${character.name}</div>
-        <div class="vd-char-note">${CHARACTER_NOTES[character.id] ?? ''}</div>
       </div>
     `).join('');
 

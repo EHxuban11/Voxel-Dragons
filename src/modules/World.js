@@ -472,6 +472,11 @@ export class World extends THREE.Group {
     return surface === null ? 0 : surface + 1.02;
   }
 
+  // True if this column is open water (used by enemies to avoid walking in).
+  isWater(x, z) {
+    return this.getBlock(Math.floor(x), this.options.waterLevel, Math.floor(z)) === 'water';
+  }
+
   rebuildMeshes() {
     this.clearMeshes();
 

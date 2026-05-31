@@ -466,26 +466,45 @@ export class Weapons {
 
   _spawnMuzzleFlash(origin, direction, weapon, context) {
     const scene = context.scene;
-    const ttl = context.flashDuration ?? 0.055;
+    const ttl = context.flashDuration ?? 0.07;
     const payload = { weapon, origin: origin.clone(), direction: direction.clone(), ttl };
+
+    // Thrown weapons (the hunter's dagger) have no muzzle flash — that white
+    // pop read as a stray projectile.
+    if (weapon.projectile) {
+      this._emit('onMuzzleFlash', payload);
+      return;
+    }
 
     if (scene?.add) {
       const color = weapon.flashColor ?? 0xffcc66;
-      // No PointLight here: adding/removing lights forces Three to recompile
-      // every material (a big FPS hitch when firing). The emissive glow mesh
-      // alone reads as a muzzle flash.
-      const geometry = new THREE.SphereGeometry(0.08, 8, 8);
-      const material = new THREE.MeshBasicMaterial({
+      // Shotgun/blaster get a chunkier flash; bullets a small one. No PointLight
+      // here: adding/removing lights forces Three to recompile every material (a
+      // big FPS hitch when firing). Additive glow spheres read as a muzzle flash.
+      const scale = weapon.muzzleScale ?? (weapon.penetrate ? 2.4 : (weapon.pellets > 1 ? 2 : 1.25));
+      const group = new THREE.Group();
+      const coreMat = new THREE.MeshBasicMaterial({
+        color: 0xfff6d0,
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const core = new THREE.Mesh(new THREE.SphereGeometry(0.1 * scale, 8, 8), coreMat);
+      const glowMat = new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: 0.95,
+        opacity: 0.85,
         depthWrite: false,
+        blending: THREE.AdditiveBlending,
       });
-      const glow = new THREE.Mesh(geometry, material);
-      glow.position.copy(origin).addScaledVector(direction, context.muzzleDistance ?? 0.7);
-      scene.add(glow);
-      this.muzzleFlashes.push({ object: glow, material, scene, ttl, maxTtl: ttl });
-      payload.object = glow;
+      const glow = new THREE.Mesh(new THREE.SphereGeometry(0.24 * scale, 8, 8), glowMat);
+      group.add(core, glow);
+      group.position.copy(origin).addScaledVector(direction, context.muzzleDistance ?? 0.7);
+      group.frustumCulled = false;
+      scene.add(group);
+      this.muzzleFlashes.push({ object: group, materials: [coreMat, glowMat], scene, ttl, maxTtl: ttl });
+      payload.object = group;
     }
 
     this._emit('onMuzzleFlash', payload);
@@ -522,19 +541,27 @@ export class Weapons {
 
   _createProjectileMesh(weapon) {
     if (weapon.id === 'dagger' || weapon.projectileShape === 'dagger') {
+      // A clearly dagger-shaped projectile (blade + tip + guard + handle), big
+      // enough to read in flight; it tumbles end-over-end via _updateProjectiles.
       const group = new THREE.Group();
-      const blade = new THREE.Mesh(
-        new THREE.BoxGeometry(0.05, 0.05, 0.34),
-        new THREE.MeshStandardMaterial({ color: 0xd7dee7, metalness: 0.8, roughness: 0.3, flatShading: true }),
-      );
-      blade.position.z = -0.1;
-      const handle = new THREE.Mesh(
-        new THREE.BoxGeometry(0.045, 0.045, 0.12),
-        new THREE.MeshStandardMaterial({ color: 0x4a342a, flatShading: true }),
-      );
+      const steel = new THREE.MeshStandardMaterial({ color: 0xe8eef6, metalness: 0.85, roughness: 0.25, flatShading: true });
+      const dark = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.8, flatShading: true });
+      const gold = new THREE.MeshStandardMaterial({ color: 0xb8a64a, metalness: 0.7, roughness: 0.4, flatShading: true });
+
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.04, 0.42), steel);
+      blade.position.z = -0.26;
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.16, 4), steel);
+      tip.rotation.x = -Math.PI / 2;
+      tip.position.z = -0.55;
+      const guard = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, 0.06), gold);
+      guard.position.z = -0.02;
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.2), dark);
       handle.position.z = 0.12;
-      group.add(blade, handle);
-      group.frustumCulled = false;
+      const pommel = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.06), gold);
+      pommel.position.z = 0.24;
+
+      group.add(blade, tip, guard, handle, pommel);
+      group.traverse((child) => { child.frustumCulled = false; });
       return group;
     }
 
@@ -548,9 +575,14 @@ export class Weapons {
       const flash = this.muzzleFlashes[i];
       flash.ttl -= delta;
 
-      if (flash.material) {
-        flash.material.opacity = Math.max(0, flash.ttl / flash.maxTtl);
+      const k = Math.max(0, flash.ttl / flash.maxTtl);
+      if (flash.materials) {
+        flash.materials[0].opacity = k;
+        flash.materials[1].opacity = 0.85 * k;
+      } else if (flash.material) {
+        flash.material.opacity = k;
       }
+      if (flash.object) flash.object.scale.setScalar(1 + (1 - k) * 0.6);
 
       if (flash.ttl <= 0) {
         flash.scene?.remove?.(flash.object);
@@ -604,6 +636,10 @@ export class Weapons {
         projectile.object.position.copy(projectile.position);
         if (direction.lengthSq() > 0) {
           projectile.object.quaternion.setFromUnitVectors(PROJECTILE_FORWARD, direction);
+        }
+        if (projectile.weapon.id === 'dagger') {
+          projectile.spin = (projectile.spin ?? 0) + delta * 16;
+          projectile.object.rotateX(projectile.spin); // tumble end-over-end
         }
       }
 

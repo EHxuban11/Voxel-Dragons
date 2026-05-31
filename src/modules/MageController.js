@@ -95,7 +95,7 @@ export class MageController {
 
   // --- 2. Delayed thunder strike at the aimed ground ------------------------
   castThunder(cfg) {
-    const target = this.aimGround();
+    const target = this.aimGround(cfg.range ?? 90);
     const geometry = new THREE.CircleGeometry(cfg.radius, 32);
     geometry.rotateX(-Math.PI / 2);
     const material = new THREE.MeshBasicMaterial({ color: 0xff2020, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
@@ -106,12 +106,12 @@ export class MageController {
     this.thunders.push({ position: target.clone(), timer: cfg.delay, radius: cfg.radius, damage: cfg.damage, circle });
   }
 
-  aimGround() {
+  aimGround(range = 90) {
     const origin = this.origin();
     const dir = this.direction();
-    const hit = this.world?.raycastBlock?.(origin, dir, 90);
+    const hit = this.world?.raycastBlock?.(origin, dir, range);
     if (hit?.point) return hit.point.clone();
-    return origin.clone().addScaledVector(dir, 24);
+    return origin.clone().addScaledVector(dir, Math.min(range, 30));
   }
 
   // --- 3. Fire tornado: crowd control that lifts + burns ---------------------
@@ -179,7 +179,13 @@ export class MageController {
       p.mesh.rotation.x += delta * 4;
       p.mesh.rotation.y += delta * 3;
 
-      const done = this._solid(p.position) || this.enemies.anyNear(p.position, p.hitRadius) || p.life <= 0 || p.position.y < -4;
+      // Detonate on a wall, on the ground, or on contact with any enemy's body.
+      const groundY = this.world?.getGroundHeight?.(p.position.x, p.position.z);
+      const hitGround = Number.isFinite(groundY) && p.position.y <= groundY;
+      const hitEnemy = this.enemies.anyNearBody
+        ? this.enemies.anyNearBody(p.position, p.hitRadius)
+        : this.enemies.anyNear(p.position, p.hitRadius);
+      const done = this._solid(p.position) || hitGround || hitEnemy || p.life <= 0 || p.position.y < -4;
       if (done) {
         this.impact(p);
         this.scene.remove(p.mesh);

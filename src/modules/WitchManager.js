@@ -175,12 +175,24 @@ export class WitchManager {
       if (move !== 0) {
         const nextX = THREE.MathUtils.clamp(witch.mesh.position.x + this.tmpDir.x * witch.speed * speedFactor * dt * move, this.bounds.minX, this.bounds.maxX);
         const nextZ = THREE.MathUtils.clamp(witch.mesh.position.z + this.tmpDir.z * witch.speed * speedFactor * dt * move, this.bounds.minZ, this.bounds.maxZ);
-        if (groundHeight(world, nextX, nextZ) - witch.mesh.position.y <= 1.1) {
+        const y = witch.mesh.position.y;
+        const edgeX = nextX + Math.sign(nextX - witch.mesh.position.x) * 0.4;
+        const edgeZ = nextZ + Math.sign(nextZ - witch.mesh.position.z) * 0.4;
+        if (groundHeight(world, nextX, nextZ) - y <= 1.1 && groundHeight(world, edgeX, edgeZ) - y <= 1.1
+          && !world?.isWater?.(nextX, nextZ) && !world?.isWater?.(edgeX, edgeZ)) {
           witch.mesh.position.x = nextX;
           witch.mesh.position.z = nextZ;
         }
       }
-      witch.mesh.position.y = groundHeight(world, witch.mesh.position.x, witch.mesh.position.z);
+      const gy = groundHeight(world, witch.mesh.position.x, witch.mesh.position.z);
+      if (witch.mesh.position.y > gy + 0.05) {
+        witch.vy = (witch.vy ?? 0) - 22 * dt;
+        witch.mesh.position.y += witch.vy * dt;
+        if (witch.mesh.position.y <= gy) { witch.mesh.position.y = gy; witch.vy = 0; }
+      } else {
+        witch.mesh.position.y = gy;
+        witch.vy = 0;
+      }
 
       witch.throwTimer -= dt;
       if (witch.throwTimer <= 0) {
@@ -319,6 +331,19 @@ export class WitchManager {
       if (distance > range || distance < 0.0001) continue;
       this.tmpDir.normalize();
       if (this.tmpDir.dot(direction) < arcCos) continue;
+      const killed = this.damageWitch(witch, damage);
+      results.push({ position: witch.mesh.position.clone(), killed });
+    }
+    return results;
+  }
+
+  hitCylinder(center, radius, damage) {
+    const results = [];
+    for (const witch of this.witches) {
+      if (witch.dead) continue;
+      const dx = witch.mesh.position.x - center.x;
+      const dz = witch.mesh.position.z - center.z;
+      if (Math.hypot(dx, dz) > radius) continue;
       const killed = this.damageWitch(witch, damage);
       results.push({ position: witch.mesh.position.clone(), killed });
     }

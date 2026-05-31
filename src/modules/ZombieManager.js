@@ -150,11 +150,17 @@ export class ZombieManager {
     this.dummyTimer = 0;
     this._lastDummyValue = -1;
     this.dummyLabel = this._createDummyLabel();
+
+    // A live zombie that attacks but never moves, set just in front of you.
+    const rootedX = center.x + forwardX * 4;
+    const rootedZ = center.z + forwardZ * 4;
+    this._spawnRootedZombie(id + 1, rootedX, rootedZ, yaw, world);
   }
 
   _spawnStaticZombie(id, x, z, yaw, world, isDummy) {
     const cx = THREE.MathUtils.clamp(x, this.bounds.minX, this.bounds.maxX);
     const cz = THREE.MathUtils.clamp(z, this.bounds.minZ, this.bounds.maxZ);
+    const gy = groundHeight(world, cx, cz);
     const zombie = {
       id,
       health: isDummy ? Infinity : this.health,
@@ -164,11 +170,15 @@ export class ZombieManager {
       attackTimer: Infinity,
       static: true,
       dummy: isDummy,
+      training: !isDummy, // rows reset to their spot / respawn; the dummy doesn't
+      home: { x: cx, y: gy, z: cz },
+      homeYaw: yaw + Math.PI,
+      idleTimer: 0,
       damageAccum: 0,
       mesh: this.createZombieMesh(id),
       dead: false,
     };
-    zombie.mesh.position.set(cx, groundHeight(world, cx, cz), cz);
+    zombie.mesh.position.set(cx, gy, cz);
     zombie.mesh.rotation.y = yaw + Math.PI; // face the player
     zombie.mesh.userData.zombie = zombie;
 
@@ -185,6 +195,55 @@ export class ZombieManager {
     this.group.add(zombie.mesh);
     this.zombies.push(zombie);
     return zombie;
+  }
+
+  // A hostile zombie that faces the player and attacks when in range, but never
+  // moves from its spot (red-tinted so it reads as the live target).
+  _spawnRootedZombie(id, x, z, yaw, world) {
+    const cx = THREE.MathUtils.clamp(x, this.bounds.minX, this.bounds.maxX);
+    const cz = THREE.MathUtils.clamp(z, this.bounds.minZ, this.bounds.maxZ);
+    const gy = groundHeight(world, cx, cz);
+    const zombie = {
+      id,
+      health: this.health,
+      maxHealth: this.health,
+      speed: 0,
+      damage: this.damage,
+      attackTimer: 0.6,
+      rooted: true,
+      training: true,
+      home: { x: cx, y: gy, z: cz },
+      homeYaw: yaw + Math.PI,
+      idleTimer: 0,
+      dead: false,
+      mesh: this.createZombieMesh(id),
+    };
+    zombie.mesh.position.set(cx, gy, cz);
+    zombie.mesh.rotation.y = yaw + Math.PI;
+    zombie.mesh.userData.zombie = zombie;
+    zombie.mesh.traverse((child) => {
+      if (child.isMesh) {
+        child.material = child.material.clone();
+        child.material.color.setHex(0xb33636);
+      }
+    });
+    this.group.add(zombie.mesh);
+    this.zombies.push(zombie);
+    return zombie;
+  }
+
+  // Sends a training target back to its spawn at full health (used both when its
+  // 7s idle timer elapses and after it "dies").
+  _respawnTraining(zombie) {
+    zombie.health = zombie.maxHealth;
+    zombie.dead = false;
+    zombie.respawnTimer = null;
+    zombie.idleTimer = 0;
+    zombie.vy = 0;
+    if (zombie.home) zombie.mesh.position.set(zombie.home.x, zombie.home.y, zombie.home.z);
+    if (zombie.homeYaw != null) zombie.mesh.rotation.y = zombie.homeYaw;
+    zombie.mesh.visible = true;
+    if (!zombie.mesh.parent) this.group.add(zombie.mesh);
   }
 
   _createDummyLabel() {
@@ -253,7 +312,20 @@ export class ZombieManager {
     const guardActive = Boolean(player?.guardActive);
 
     for (const zombie of this.zombies) {
-      if (zombie.dead) continue;
+      if (zombie.dead) {
+        // Training targets reappear at their spawn a couple of seconds after dying.
+        if (zombie.training && zombie.respawnTimer != null) {
+          zombie.respawnTimer -= dt;
+          if (zombie.respawnTimer <= 0) this._respawnTraining(zombie);
+        }
+        continue;
+      }
+
+      // Training targets snap back to their spawn after 7s without being hit.
+      if (zombie.training) {
+        zombie.idleTimer = (zombie.idleTimer ?? 0) + dt;
+        if (zombie.idleTimer >= 7) this._respawnTraining(zombie);
+      }
 
       // Slow (mage blizzard): reduce speed and keep the frozen tint.
       let speedFactor = 1;
@@ -279,7 +351,7 @@ export class ZombieManager {
         zombie.mesh.rotation.y = Math.atan2(this.tmpDir.x, this.tmpDir.z);
       }
 
-      if (distance > this.attackRange) {
+      if (!zombie.rooted && distance > this.attackRange) {
         const nextX = THREE.MathUtils.clamp(
           zombie.mesh.position.x + this.tmpDir.x * zombie.speed * speedFactor * dt,
           this.bounds.minX,
@@ -291,15 +363,32 @@ export class ZombieManager {
           this.bounds.maxZ,
         );
         // Zombies can only step up one block. A taller wall blocks them in that
-        // direction (they keep facing/trying, but can't pass).
-        const nextGround = groundHeight(world, nextX, nextZ);
-        if (nextGround - zombie.mesh.position.y <= 1.1) {
+        // direction (they keep facing/trying, but can't pass). Sampling a point
+        // ahead of the body keeps them from sinking into the wall.
+        const y = zombie.mesh.position.y;
+        const edgeX = nextX + Math.sign(nextX - zombie.mesh.position.x) * 0.4;
+        const edgeZ = nextZ + Math.sign(nextZ - zombie.mesh.position.z) * 0.4;
+        const passable = groundHeight(world, nextX, nextZ) - y <= 1.1
+          && groundHeight(world, edgeX, edgeZ) - y <= 1.1
+          && !world?.isWater?.(nextX, nextZ) // never wade into / fall in water
+          && !world?.isWater?.(edgeX, edgeZ);
+        if (passable) {
           zombie.mesh.position.x = nextX;
           zombie.mesh.position.z = nextZ;
         }
       }
 
-      zombie.mesh.position.y = groundHeight(world, zombie.mesh.position.x, zombie.mesh.position.z);
+      // Settle to the ground: snap up when stepping up, but fall smoothly under
+      // gravity when the ground drops away (no more abrupt teleport downward).
+      const gy = groundHeight(world, zombie.mesh.position.x, zombie.mesh.position.z);
+      if (zombie.mesh.position.y > gy + 0.05) {
+        zombie.vy = (zombie.vy ?? 0) - 22 * dt;
+        zombie.mesh.position.y += zombie.vy * dt;
+        if (zombie.mesh.position.y <= gy) { zombie.mesh.position.y = gy; zombie.vy = 0; }
+      } else {
+        zombie.mesh.position.y = gy;
+        zombie.vy = 0;
+      }
 
       // shamble bob
       zombie.mesh.children[0].rotation.z = Math.sin(this.elapsed * 6 + zombie.id) * 0.08;
@@ -354,8 +443,16 @@ export class ZombieManager {
       zombie.damageAccum = (zombie.damageAccum || 0) + amount;
       return false;
     }
+    zombie.idleTimer = 0; // any hit restarts the training auto-return timer
     zombie.health = Math.max(0, zombie.health - amount);
     if (zombie.health <= 0) {
+      if (zombie.training) {
+        // Training targets don't truly die: hide, then respawn at their spot.
+        zombie.dead = true;
+        zombie.mesh.visible = false;
+        zombie.respawnTimer = 2;
+        return true;
+      }
       this.killZombie(zombie);
       return true;
     }
@@ -477,6 +574,21 @@ export class ZombieManager {
       if (distance > range || distance < 0.0001) continue;
       this.tmpDir.normalize();
       if (this.tmpDir.dot(direction) < arcCos) continue;
+      const killed = this.damageZombie(zombie, damage);
+      results.push({ position: zombie.mesh.position.clone(), killed });
+    }
+    return results;
+  }
+
+  // Hit everything within a horizontal radius regardless of height (the hunter's
+  // aerial "ataque to guapo" damages in a full vertical cylinder).
+  hitCylinder(center, radius, damage) {
+    const results = [];
+    for (const zombie of this.zombies) {
+      if (zombie.dead) continue;
+      const dx = zombie.mesh.position.x - center.x;
+      const dz = zombie.mesh.position.z - center.z;
+      if (Math.hypot(dx, dz) > radius) continue;
       const killed = this.damageZombie(zombie, damage);
       results.push({ position: zombie.mesh.position.clone(), killed });
     }
