@@ -15,6 +15,7 @@ import { Inventory } from './Inventory.js';
 import { CHARACTERS } from '../content/characters/Characters.js';
 import { MAPS } from '../content/maps/index.js';
 import { buildViewmodel, disposeViewmodel } from '../engine/Viewmodels.js';
+import { buildAvatar, buildNameTag } from '../engine/Avatars.js';
 import { Shop } from '../ui/Shop.js';
 import { getIcon } from '../ui/Icons.js';
 import { MageController } from './combat/MageController.js';
@@ -24,6 +25,7 @@ export class Game {
   constructor(root, options = {}) {
     this.root = root;
     this.character = options.character ?? CHARACTERS[0];
+    this.username = options.username ?? 'Jugador';
     this.map = options.map ?? MAPS[0];
     this.onExit = options.onExit ?? null;
     // 'waves' (pick character + map) or 'campaign' (story rules in BALANCE.campaign).
@@ -260,6 +262,13 @@ export class Game {
 
     this.scene.add(this.world);
     this.scene.add(this.player.object);
+    // The player's own avatar + floating username. Hidden for the local player
+    // (first person); it's what other players would see in a future multiplayer.
+    this.avatar = buildAvatar(this.character);
+    this.nameTag = buildNameTag(this.username);
+    this.avatar.add(this.nameTag);
+    this.avatar.visible = false;
+    this.player.object.add(this.avatar);
     this.scene.add(this.targetOutline);
     this.addBoundaryBarrier();
     this.setupScene();
@@ -594,6 +603,9 @@ export class Game {
     }
     if (this.input.consume('interact')) {
       this.inventory.toggleOpen();
+    }
+    if (this.input.consume('breakBlock')) {
+      this.breakTargetBlock();
     }
     if (this.input.consume('weaponNext')) {
       this.inventory.next();
@@ -1538,10 +1550,16 @@ export class Game {
     } else if (slot?.kind === 'ability') {
       // The samurai holds the katana for the Técnica slot too.
       if (slot.abilityId === 'samuraiSpecial') kind = this.samuraiBuffActive ? 'katana-drawn' : 'katana';
+      // The mage grips a glowing staff for any spell; the hunter holds a bomb
+      // for the bomb slot and the dagger for the aerial strike.
+      else if (this.character.loadout === 'spells') kind = 'staff';
+      else if (slot.abilityId === 'bomb') kind = 'bomb';
+      else if (slot.abilityId === 'aerial') kind = 'dagger';
     }
 
     const sleeveByLoadout = { guns: 0xffd166, sword: 0x9aa6b2, dagger: 0x3f6b3a, katana: 0xb33636, spells: 0x6a3fb5 };
-    const model = kind ? buildViewmodel(kind, { sleeve: sleeveByLoadout[this.character.loadout] ?? 0x6d6d6d }) : null;
+    const hasBomb = slot?.abilityId === 'bomb' ? (slot.count ?? 0) > 0 : true;
+    const model = kind ? buildViewmodel(kind, { sleeve: sleeveByLoadout[this.character.loadout] ?? 0x6d6d6d, hasBomb }) : null;
     if (model) {
       this.camera.add(model);
       this.viewmodel = model;
@@ -1733,6 +1751,17 @@ export class Game {
     }
   }
 
+  // G: any character can break the block they're looking at to free themselves
+  // if they get walled in. The duck recovers wood it breaks; others just clear it.
+  breakTargetBlock() {
+    const hit = this.world.raycastBlock(this.getCameraWorldPosition(), this.getLookDirection(), BALANCE.world.interactionRange);
+    if (!hit || hit.type === 'water') return;
+    if (this.world.removeBlock(hit)) {
+      this.effects.impact(hit.point, 0xffffff);
+      if (this.character.canPlaceBlocks && hit.type === 'wood') this.inventory.addBlock('wood');
+    }
+  }
+
   placeSelectedBlock() {
     if (!this.character.canPlaceBlocks) return;
     if (!this.inventory.canPlaceSelected()) return;
@@ -1880,6 +1909,12 @@ export class Game {
       this.camera.remove(this.viewmodel);
       disposeViewmodel(this.viewmodel);
       this.viewmodel = null;
+    }
+    if (this.avatar) {
+      this.player.object.remove(this.avatar);
+      this.nameTag?.userData?.texture?.dispose?.();
+      disposeViewmodel(this.avatar);
+      this.avatar = null;
     }
     this.platform.dispose();
   }

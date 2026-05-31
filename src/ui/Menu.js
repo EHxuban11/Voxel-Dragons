@@ -231,8 +231,51 @@ export function injectStyles() {
     .vd-menu-start:active { box-shadow: 0 2px 0 #2f6e1d; }
 
     .vd-menu-status { font-family: 'PixelFont', monospace; font-size: 9px; }
+
+    .vd-name-input {
+      width: min(320px, 80vw);
+      padding: 14px 16px;
+      font-family: 'PixelFont', monospace;
+      font-size: 16px;
+      font-weight: 700;
+      text-align: center;
+      color: #f7fbff;
+      background: rgba(20, 28, 38, 0.82);
+      border: 3px solid #000;
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.12);
+      outline: none;
+    }
+
+    .vd-name-input:focus { border-color: #ffd166; }
   `;
   document.head.appendChild(style);
+}
+
+// One-time username prompt shown before the mode menu. Other players would see
+// this name floating over the avatar's head (see engine/Avatars.js).
+export function promptUsername(container, onSubmit) {
+  injectStyles();
+  const root = document.createElement('div');
+  root.className = 'vd-menu';
+  root.innerHTML = `
+    <h1 class="vd-menu-title">Voxel Dragons</h1>
+    <p class="vd-menu-subtitle">¿Cuál es tu nombre de usuario?</p>
+    <input class="vd-name-input" data-menu="name" maxlength="16" placeholder="Jugador" />
+    <button class="vd-menu-start" data-menu="confirm">Continuar</button>
+  `;
+  container.appendChild(root);
+
+  const input = root.querySelector('[data-menu="name"]');
+  const confirm = () => {
+    const name = (input.value || '').trim() || 'Jugador';
+    root.remove();
+    onSubmit?.(name);
+  };
+  root.querySelector('[data-menu="confirm"]').addEventListener('click', confirm);
+  input.addEventListener('keydown', (event) => { if (event.key === 'Enter') confirm(); });
+  setTimeout(() => input.focus(), 0);
+
+  return root;
 }
 
 const CHARACTER_NOTES = {

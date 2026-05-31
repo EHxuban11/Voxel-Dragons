@@ -467,26 +467,44 @@ export class Weapons {
 
   _spawnMuzzleFlash(origin, direction, weapon, context) {
     const scene = context.scene;
-    const ttl = context.flashDuration ?? 0.055;
+    const ttl = context.flashDuration ?? 0.07;
     const payload = { weapon, origin: origin.clone(), direction: direction.clone(), ttl };
+
+    // The thrown dagger has no muzzle flash — that white pop read as a stray shot.
+    if (weapon.id === 'dagger' || weapon.projectileShape === 'dagger') {
+      this._emit('onMuzzleFlash', payload);
+      return;
+    }
 
     if (scene?.add) {
       const color = weapon.flashColor ?? 0xffcc66;
-      // No PointLight here: adding/removing lights forces Three to recompile
-      // every material (a big FPS hitch when firing). The emissive glow mesh
-      // alone reads as a muzzle flash.
-      const geometry = new THREE.SphereGeometry(0.08, 8, 8);
-      const material = new THREE.MeshBasicMaterial({
+      // Shotgun/blaster get a chunkier flash; bullets a small one. No PointLight
+      // here: adding/removing lights forces Three to recompile every material (a
+      // big FPS hitch when firing). Additive glow spheres read as a muzzle flash.
+      const scale = weapon.muzzleScale ?? (weapon.penetrate ? 2.4 : (weapon.pellets > 1 ? 2 : 1.25));
+      const group = new THREE.Group();
+      const coreMat = new THREE.MeshBasicMaterial({
+        color: 0xfff6d0,
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const core = new THREE.Mesh(new THREE.SphereGeometry(0.1 * scale, 8, 8), coreMat);
+      const glowMat = new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: 0.95,
+        opacity: 0.85,
         depthWrite: false,
+        blending: THREE.AdditiveBlending,
       });
-      const glow = new THREE.Mesh(geometry, material);
-      glow.position.copy(origin).addScaledVector(direction, context.muzzleDistance ?? 0.7);
-      scene.add(glow);
-      this.muzzleFlashes.push({ object: glow, material, scene, ttl, maxTtl: ttl });
-      payload.object = glow;
+      const glow = new THREE.Mesh(new THREE.SphereGeometry(0.24 * scale, 8, 8), glowMat);
+      group.add(core, glow);
+      group.position.copy(origin).addScaledVector(direction, context.muzzleDistance ?? 0.7);
+      group.frustumCulled = false;
+      scene.add(group);
+      this.muzzleFlashes.push({ object: group, materials: [coreMat, glowMat], scene, ttl, maxTtl: ttl });
+      payload.object = group;
     }
 
     this._emit('onMuzzleFlash', payload);
@@ -549,9 +567,14 @@ export class Weapons {
       const flash = this.muzzleFlashes[i];
       flash.ttl -= delta;
 
-      if (flash.material) {
-        flash.material.opacity = Math.max(0, flash.ttl / flash.maxTtl);
+      const k = Math.max(0, flash.ttl / flash.maxTtl);
+      if (flash.materials) {
+        flash.materials[0].opacity = k;
+        flash.materials[1].opacity = 0.85 * k;
+      } else if (flash.material) {
+        flash.material.opacity = k;
       }
+      if (flash.object) flash.object.scale.setScalar(1 + (1 - k) * 0.6);
 
       if (flash.ttl <= 0) {
         flash.scene?.remove?.(flash.object);
@@ -605,6 +628,10 @@ export class Weapons {
         projectile.object.position.copy(projectile.position);
         if (direction.lengthSq() > 0) {
           projectile.object.quaternion.setFromUnitVectors(PROJECTILE_FORWARD, direction);
+        }
+        if (projectile.weapon.id === 'dagger' || projectile.weapon.projectileShape === 'dagger') {
+          projectile.spin = (projectile.spin ?? 0) + delta * 16;
+          projectile.object.rotateX(projectile.spin); // tumble end-over-end
         }
       }
 

@@ -1,6 +1,6 @@
 import './styles.css';
 import { Game } from './game/Game.js';
-import { Menu } from './ui/Menu.js';
+import { Menu, promptUsername } from './ui/Menu.js';
 import { ModeMenu } from './ui/ModeMenu.js';
 import { CampaignMenu } from './ui/CampaignMenu.js';
 import { CHARACTERS, getCharacter } from './content/characters/Characters.js';
@@ -10,11 +10,14 @@ import { createWebPlatform } from './platform/web/createWebPlatform.js';
 
 const root = document.querySelector('#app');
 
+// Collected once at startup; floats over the player's avatar for other players.
+let username = 'Jugador';
+
 // Composition root: builds a fresh browser platform per run and injects it into
 // the game; returns to the mode menu on exit.
 function launch(options) {
   const platform = createWebPlatform({ root });
-  const game = new Game(root, { platform, onExit: showModeMenu, ...options });
+  const game = new Game(root, { platform, username, onExit: showModeMenu, ...options });
   game.start();
 }
 
@@ -49,4 +52,8 @@ function showCampaignMenu() {
   );
 }
 
-showModeMenu();
+// Ask for the username once, then drop into the mode menu.
+promptUsername(root, (name) => {
+  username = name;
+  showModeMenu();
+});
