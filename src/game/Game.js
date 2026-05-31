@@ -6,6 +6,7 @@ import { DragonManager } from './enemies/DragonManager.js';
 import { ZombieManager } from './enemies/ZombieManager.js';
 import { SkeletonManager } from './enemies/SkeletonManager.js';
 import { WitchManager } from './enemies/WitchManager.js';
+import { createEnemyAggregator } from './enemies/EnemyAggregator.js';
 import { HUD } from '../ui/HUD.js';
 import { Effects } from '../engine/Effects.js';
 import { Inventory } from './Inventory.js';
@@ -112,30 +113,15 @@ export class Game {
     this.skeletons = new SkeletonManager(this.scene, { bounds, world: this.world, ...BALANCE.skeletons });
     this.witches = new WitchManager(this.scene, { bounds, world: this.world, ...BALANCE.witches });
 
-    // Aggregator that fans hits/effects out to every enemy manager.
-    const managers = [this.dragons, this.zombies, this.skeletons, this.witches];
-    const lists = () => [this.dragons.dragons, this.zombies.zombies, this.skeletons.skeletons, this.witches.witches];
-    this.enemies = {
-      managers,
-      hitMelee: (o, d, r, dmg, arc) => managers.flatMap((m) => m.hitMelee(o, d, r, dmg, arc)),
-      hitBox: (o, f, ri, l, hw, dmg) => managers.flatMap((m) => m.hitBox(o, f, ri, l, hw, dmg)),
-      knockback: (c, r, f) => managers.forEach((m) => m.knockback(c, r, f, this.world)),
-      slow: (c, r, fac, dur) => managers.forEach((m) => m.slow(c, r, fac, dur)),
-      tornadoPull: (c, r, e) => { this.zombies.tornadoPull(c, r, e); this.skeletons.tornadoPull(c, r, e); this.witches.tornadoPull(c, r, e); },
-      heal: (c, r, amount) => managers.forEach((m) => m.heal(c, r, amount)),
-      hitAllByRay: (ray, dmg) => managers.flatMap((m) => m.hitAllByRay(ray, dmg)),
-      hitByRay: (ray, dmg) => {
-        let best = null;
-        let bestMgr = null;
-        for (const m of managers) {
-          const peek = m.peekRay(ray);
-          if (peek && (!best || peek.distance < best.distance)) { best = peek; bestMgr = m; }
-        }
-        return best ? bestMgr.applyRayHit(best, dmg) : null;
-      },
-      anyNear: (pos, radius) => lists().some((list) => list.some((e) => !e.dead && pos.distanceTo(e.mesh.position) < radius)),
-      aliveCount: () => managers.reduce((sum, m) => sum + m.getAliveCount(), 0),
-    };
+    // The uniform enemy contract (see enemies/EnemyAggregator.js): weapons and
+    // the mage act on every enemy type through this single object.
+    this.enemies = createEnemyAggregator({
+      dragons: this.dragons,
+      zombies: this.zombies,
+      skeletons: this.skeletons,
+      witches: this.witches,
+      world: this.world,
+    });
     this.enemyTargets = this.enemies; // weapons use hitByRay/hitAllByRay
 
     // Witches lob healing potions at the nearest wounded monster.
