@@ -5,9 +5,16 @@
 //
 // Contract: hitMelee/hitBox/hitByRay/hitAllByRay/knockback/slow/heal/
 // tornadoPull/anyNear/aliveCount (+ the raw `managers` list).
-export function createEnemyAggregator({ dragons, zombies, skeletons, witches, world }) {
+export function createEnemyAggregator({ dragons, zombies, skeletons, witches, snow, world }) {
+  // `snow` is optional (only the snow map uses it). When present it joins the
+  // fan-out so guns/melee/abilities/status effects hit snow mobs like any other.
   const managers = [dragons, zombies, skeletons, witches];
-  const lists = () => [dragons.dragons, zombies.zombies, skeletons.skeletons, witches.witches];
+  if (snow) managers.push(snow);
+  const lists = () => {
+    const ls = [dragons.dragons, zombies.zombies, skeletons.skeletons, witches.witches];
+    if (snow) ls.push(snow.enemies);
+    return ls;
+  };
 
   return {
     managers,

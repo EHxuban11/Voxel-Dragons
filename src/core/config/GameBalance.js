@@ -346,6 +346,40 @@ export const BALANCE = deepFreeze({
     timestop: { duration: 5, freezeDelay: 0.18, gaugeMax: 36 },
   },
 
+  // Snow map only: a wintry roster + two bosses. Special enemies lean on the
+  // environment — the cold chills (slows) the player, snow lets a boulder roll,
+  // a blizzard spirit floats and pelts ice. Miniboss on wave 5, big boss wave 10.
+  snow: {
+    spawnRadiusMin: 16,
+    spawnRadiusMax: 27,
+    coins: { yeti: 4, roller: 3, wisp: 3, alpha: 30, colossus: 90 },
+    // Yeti: a big, tanky, slow brute. Its frozen blows chill (slow) the player.
+    yeti: { health: 70, speed: 2.5, damage: 16, attackRange: 2.7, attackCooldown: 1.4, scale: 2.2, chill: { factor: 0.55, duration: 2.5 } },
+    // Snowroller: a packed snowball that rolls straight at you, fast — dodge it.
+    // It can't turn, shatters on a wall, and bursts on impact for heavy damage.
+    roller: { health: 26, speed: 11, damage: 30, hitRadius: 1.5 },
+    // Frost Wisp: floats, keeps its distance and lobs chilling ice shards.
+    wisp: { health: 20, speed: 3.4, hover: 3.2, keepMin: 10, keepMax: 17, shootCooldown: 2.0, shardSpeed: 24, shardDamage: 8, chill: { factor: 0.7, duration: 1.6 } },
+    // Wave 5 miniboss — Alpha Yeti: charges, ground-slam ice ring, snow boulders,
+    // and a roar that summons lesser yetis.
+    miniboss: {
+      wave: 5, health: 820, scale: 2.9, speed: 2.8,
+      slam: { radius: 6.5, damage: 26, chill: { factor: 0.5, duration: 2.5 } },
+      boulder: { damage: 22, speed: 19, hitRadius: 1.2 },
+      summon: { yetis: 2 },
+      attackEvery: [2.0, 3.0],
+    },
+    // Wave 10 boss — Ice Colossus: huge, slow, central. Erupting icicle fields,
+    // a frost-breath cone (heavy chill), and a blizzard roar that summons + chills.
+    boss: {
+      wave: 10, health: 5200, scale: 3.6, speed: 1.5, center: [0, 0], altitude: 0,
+      icicles: { count: 8, telegraph: 1.1, radius: 3.0, spread: 13, damage: 72, columnTtl: 0.6 },
+      frost: { telegraph: 1.6, range: 24, halfAngle: 0.6, damage: 55, chill: { factor: 0.4, duration: 3 } },
+      blizzard: { roar: 1.2, yetis: 3, wisps: 2, chill: { factor: 0.5, duration: 3 } },
+      attackEvery: [2.2, 3.4],
+    },
+  },
+
   progression: {
     waveCount: 10, // total waves in a run
     shopWave: 5, // the shop opens before this wave

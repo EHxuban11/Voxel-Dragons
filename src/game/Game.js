@@ -21,6 +21,7 @@ import { getIcon } from '../ui/Icons.js';
 import { MageController } from './combat/MageController.js';
 import { LuffyController } from './combat/LuffyController.js';
 import { DioController } from './combat/DioController.js';
+import { SnowManager } from './enemies/SnowManager.js';
 import { BALANCE } from '../core/config/GameBalance.js';
 
 export class Game {
@@ -136,6 +137,9 @@ export class Game {
     });
     this.skeletons = new SkeletonManager(this.scene, { bounds, world: this.world, ...BALANCE.skeletons, headshotDamageMult: this.headshotDamageMult });
     this.witches = new WitchManager(this.scene, { bounds, world: this.world, ...BALANCE.witches, headshotDamageMult: this.headshotDamageMult });
+    // Snow map only: yetis / snowrollers / frost wisps + the two snow bosses.
+    this.isSnow = this.map?.id === 'snowland';
+    this.snow = new SnowManager(this.scene, { bounds, camera: this.camera, world: this.world });
 
     // The uniform enemy contract (see enemies/EnemyAggregator.js): weapons and
     // the mage act on every enemy type through this single object.
@@ -144,6 +148,7 @@ export class Game {
       zombies: this.zombies,
       skeletons: this.skeletons,
       witches: this.witches,
+      snow: this.snow,
       world: this.world,
     });
     // Any damage dealt through the aggregator (guns, bombs, aerial, mage spells)
@@ -265,6 +270,11 @@ export class Game {
         })
       : null;
     this.timeStopped = false; // set by Dio's The World; freezes the enemies
+    // Snow "chill": a temporary player slow applied by snow attacks (any character).
+    this._baseMove = this.player.config.moveSpeed;
+    this._baseJump = this.player.config.jumpSpeed;
+    this.chillTimer = 0;
+    this.chillFactor = 1;
     this.shop = null;
     this.shopDone = false;
     this.victory = false;
@@ -343,9 +353,9 @@ export class Game {
       this.openShop();
     }
 
-    // Waves mode wave 10: the meteor cutscene plays first; enemies spawn when it
-    // ends (after the map has become a crater and the player has respawned).
-    if (!this.isCampaign && this.wave === BALANCE.meteor.wave) {
+    // Waves mode wave 10 (meadow only): the meteor cutscene plays first. The snow
+    // map has its own wave-10 boss (the Ice Colossus) and no meteor.
+    if (!this.isCampaign && !this.isSnow && this.wave === BALANCE.meteor.wave) {
       this.startMeteorCinematic();
       return;
     }
@@ -353,7 +363,29 @@ export class Game {
     this.spawnWaveEnemies(this.wave);
   }
 
+  // Snow map roster: yetis / snowrollers / frost wisps, the wave-5 Alpha Yeti
+  // miniboss and the wave-10 Ice Colossus. The standard mobs are cleared so the
+  // wintry map fields only its own enemies.
+  spawnSnowWaveEnemies(w) {
+    this.zombies.spawnWave(0, this.player, this.world);
+    this.skeletons.spawnWave(0, this.player, this.world);
+    this.witches.spawnWave(0, this.player, this.world);
+    this.dragons.spawnWave(0);
+    if (w === BALANCE.snow.miniboss.wave) {
+      this.snow.spawnMiniboss(this.player, this.world);
+      this.hud.showMessage('☠ MINIBOSS: Yeti Alfa', 2800);
+    } else if (w === BALANCE.snow.boss.wave) {
+      this.snow.spawnBoss(this.player, this.world);
+      this.hud.showMessage('❄ COLOSO DE HIELO', 3200);
+    } else {
+      this.snow.spawnWave(w, this.player, this.world);
+      this.hud.showMessage(`Oleada ${w}`, 1500);
+    }
+  }
+
   spawnWaveEnemies(w) {
+    if (this.isSnow && !this.isCampaign) { this.spawnSnowWaveEnemies(w); return; }
+
     // Waves mode wave 10 (after the meteor): the Dragon King alone — no other
     // enemies spawn, it summons its own reinforcements.
     if (!this.isCampaign && w === BALANCE.kingDragon.wave) {
@@ -698,10 +730,12 @@ export class Game {
       const hp = this.player.health + this.player.shield;
       if (hp < this._luffyLastHp - 0.001) this.luffy.onPlayerHit();
       this._luffyLastHp = hp;
-      // Gear 5 (and Snakeman) jump higher / move faster.
-      this.player.config.moveSpeed = this._luffyBaseMove * this.luffy.speedMult;
-      this.player.config.jumpSpeed = this._luffyBaseJump * this.luffy.jumpMult;
     }
+    // Player move/jump speed = base × Luffy gear (if any) × snow chill (if any).
+    if (this.chillTimer > 0) this.chillTimer -= delta;
+    const chillMult = this.chillTimer > 0 ? this.chillFactor : 1;
+    this.player.config.moveSpeed = this._baseMove * (this.luffy ? this.luffy.speedMult : 1) * chillMult;
+    this.player.config.jumpSpeed = this._baseJump * (this.luffy ? this.luffy.jumpMult : 1);
     if (this.dio) {
       this.dio.update(delta);
       this.timeStopped = this.dio.timestopActive;
@@ -726,6 +760,7 @@ export class Game {
       p.begin('witches');
       this.witches.update(delta, this.player, this.world);
       p.end();
+      if (this.isSnow) { p.begin('snow'); this.snow.update(delta, this.player, this.world); p.end(); }
     }
 
     p.begin('enemyEvents');
@@ -733,13 +768,15 @@ export class Game {
       this.handleZombieEvents();
       this.handleSkeletonArrows();
       this.handleWitchPotions();
+      if (this.isSnow) this.handleSnowEvents();
     }
 
     // Coins are earned by killing enemies.
     this.coins += this.dragons.consumeKills() * BALANCE.coins.dragon
       + this.zombies.consumeKills() * BALANCE.coins.zombie
       + this.skeletons.consumeKills() * BALANCE.coins.skeleton
-      + this.witches.consumeKills() * BALANCE.coins.witch;
+      + this.witches.consumeKills() * BALANCE.coins.witch
+      + this.snow.consumeCoins(); // snow mobs carry their own coin value
 
     // Between waves: a visible 5s countdown, then the next wave. The final wave
     // goes straight to victory (no next wave to count down to).
@@ -872,6 +909,7 @@ export class Game {
       zombies: this.zombies.getAliveCount(),
       skeletons: this.skeletons.getAliveCount(),
       witches: this.witches.getAliveCount(),
+      snow: this.isSnow ? this.snow.getAliveCount() : null,
       coins: this.coins,
       revive: this.hasRevive,
       guard: this.player.guardActive,
@@ -1648,6 +1686,50 @@ export class Game {
     }
   }
 
+  // Snow roster: melee/boulder/icicle/breath hits damage and chill the player;
+  // a boss roar summons reinforcements (or kicks up a blizzard).
+  handleSnowEvents() {
+    for (const event of this.snow.consumeEvents()) {
+      if (event.type === 'summon') {
+        this.snow.reinforce({ yeti: event.yetis ?? 0, wisp: event.wisps ?? 0 }, this.player, this.world);
+        this.hud.showMessage('❄ El yeti ruge y llama refuerzos', 1400);
+        this.audio.explosion?.();
+      } else if (event.type === 'blizzard') {
+        this._applyChill(event.chill);
+        this.hud.showMessage('❄ ¡Ventisca!', 1400);
+      } else if (event.type === 'parry') {
+        this.effects.impact(event.position, 0x9fe8ff);
+      } else if (event.type === 'attack' || event.type === 'projectile' || event.type === 'aoe') {
+        // AoE/telegraph hits carry a `hit` flag; melee/projectile imply contact.
+        const connects = event.type === 'aoe' ? event.hit : true;
+        if (!connects) continue;
+        if (this.parryWindowTimer > 0 && !this.samuraiBuffActive) { this.samuraiParrySuccess(); continue; }
+        if (this.player.invulnerable) continue;
+        this.player.damage(event.damage);
+        this.hud.flashDamage();
+        this.audio.damage();
+        if (event.chill) this._applyChill(event.chill);
+      }
+    }
+    // Snow impacts (shatters, slams, frost) draw their effects.
+    for (const im of this.snow.consumeImpacts()) {
+      if (im.kind === 'shock') this.effects.shockwave(im.position, im.radius ?? 5, 0x9fe0ff);
+      else if (im.kind === 'frost') this.effects.shockwave(im.position, 4, 0xbfeaff);
+      else if (im.kind === 'spark') this.effects.impact(im.position, 0xbfeaff);
+      else this.effects.impact(im.position, 0xffffff);
+    }
+  }
+
+  // Applies a movement-slow (cold): refresh the timer and take the new factor.
+  // The slow only applies while chillTimer > 0 (see tick), so a stale factor is
+  // harmless once it expires.
+  _applyChill(chill) {
+    if (!chill) return;
+    this.chillTimer = Math.max(this.chillTimer, chill.duration ?? 2);
+    this.chillFactor = chill.factor ?? 0.6;
+    this.hud.setTint?.(0.18);
+  }
+
   onSelectionChanged() {
     this.syncSelectedWeapon();
     this.updateViewmodel();
@@ -2055,6 +2137,7 @@ export class Game {
     this.mage?.dispose?.();
     this.luffy?.dispose?.();
     this.dio?.dispose?.();
+    this.snow?.dispose?.();
     if (this.renderer?.domElement) this.renderer.domElement.style.filter = ''; // clear timestop grayscale
     for (const bomb of this.bombs) this.scene.remove(bomb.mesh);
     this.bombs.length = 0;

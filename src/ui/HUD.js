@@ -762,7 +762,7 @@ export class HUD {
       <div class="vd-countdown" data-hud="countdown"></div>
       <div class="vd-top-right">
         <div class="vd-topline"><img class="vd-heart vd-glyph" data-hud="heart" src="${getGlyph('heart')}" alt="vida" /><span class="vd-coins"><img class="vd-glyph" src="${getGlyph('coin')}" alt="monedas" /> <span data-hud="coins">0</span></span></div>
-        Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span><br>Esqueletos: <span data-hud="skeletons">0</span><br>Brujas: <span data-hud="witches">0</span>
+        Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span><br>Esqueletos: <span data-hud="skeletons">0</span><br>Brujas: <span data-hud="witches">0</span><span data-hud="snowLine" style="display:none"><br>Nieve: <span data-hud="snow">0</span></span>
       </div>
       <div class="vd-message" data-hud="message"></div>
       <div class="vd-deathscreen" data-hud="deathscreen">
@@ -804,6 +804,8 @@ export class HUD {
       zombies: this.root.querySelector('[data-hud="zombies"]'),
       skeletons: this.root.querySelector('[data-hud="skeletons"]'),
       witches: this.root.querySelector('[data-hud="witches"]'),
+      snow: this.root.querySelector('[data-hud="snow"]'),
+      snowLine: this.root.querySelector('[data-hud="snowLine"]'),
       fps: this.root.querySelector('[data-hud="fps"]'),
       coins: this.root.querySelector('[data-hud="coins"]'),
       heart: this.root.querySelector('[data-hud="heart"]'),
@@ -865,6 +867,11 @@ export class HUD {
     this.nodes.zombies.textContent = String(firstNumber(nextState, ['zombies'], DEFAULT_STATE.zombies));
     this.nodes.skeletons.textContent = String(firstNumber(nextState, ['skeletons'], DEFAULT_STATE.skeletons));
     this.nodes.witches.textContent = String(firstNumber(nextState, ['witches'], DEFAULT_STATE.witches));
+    if (this.nodes.snowLine) {
+      const snow = nextState.snow;
+      this.nodes.snowLine.style.display = (snow == null) ? 'none' : '';
+      if (snow != null) this.nodes.snow.textContent = String(snow);
+    }
     this.nodes.fps.textContent = `${Math.round(firstNumber(nextState, ['fps'], DEFAULT_STATE.fps))} FPS`;
     this.nodes.coins.textContent = String(firstNumber(nextState, ['coins'], DEFAULT_STATE.coins));
     this.nodes.heart.classList.toggle('is-used', !nextState.revive);
