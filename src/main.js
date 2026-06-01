@@ -25,6 +25,7 @@ function showModeMenu() {
   const menu = new ModeMenu(root, {
     onWaves: () => { menu.hide(); showWavesMenu(); },
     onCampaign: () => { menu.hide(); showCampaignMenu(); },
+    onSandbox: () => { menu.hide(); showSandboxMenu(); },
   });
 }
 
@@ -32,6 +33,15 @@ function showWavesMenu() {
   const menu = new Menu(root, CHARACTERS, MAPS, (character, map) => {
     menu.hide();
     launch({ character, map, mode: 'waves' });
+  });
+}
+
+// Sandbox uses the same picker as waves (all characters + meadow/snow + import a
+// custom map), but launches a free-roam run with no waves or enemies.
+function showSandboxMenu() {
+  const menu = new Menu(root, CHARACTERS, MAPS, (character, map) => {
+    menu.hide();
+    launch({ character, map, mode: 'sandbox' });
   });
 }
 

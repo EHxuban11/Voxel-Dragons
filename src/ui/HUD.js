@@ -877,14 +877,18 @@ export class HUD {
     this.nodes.heart.classList.toggle('is-used', !nextState.revive);
     this.nodes.guard.classList.toggle('is-active', Boolean(nextState.guard));
 
+    // Sandbox has no waves: hide the bar entirely.
+    if (this.nodes.wavebar) this.nodes.wavebar.style.display = nextState.sandbox ? 'none' : '';
     const wave = firstNumber(nextState, ['wave'], DEFAULT_STATE.wave);
     const waveCount = firstNumber(nextState, ['waveCount'], DEFAULT_STATE.waveCount);
-    if (this.waveCells.length !== waveCount) this.buildWaveCells(waveCount);
-    for (let i = 0; i < this.waveCells.length; i += 1) {
-      const cell = this.waveCells[i];
-      const cellWave = i + 1;
-      cell.classList.toggle('is-current', cellWave === wave);
-      cell.classList.toggle('is-done', cellWave < wave);
+    if (!nextState.sandbox) {
+      if (this.waveCells.length !== waveCount) this.buildWaveCells(waveCount);
+      for (let i = 0; i < this.waveCells.length; i += 1) {
+        const cell = this.waveCells[i];
+        const cellWave = i + 1;
+        cell.classList.toggle('is-current', cellWave === wave);
+        cell.classList.toggle('is-done', cellWave < wave);
+      }
     }
     const countdown = nextState.countdown;
     if (this.nodes.countdown) {

@@ -35,6 +35,7 @@ export class Game {
     this.mode = options.mode ?? 'waves';
     this.campaign = options.campaign ?? null;
     this.isCampaign = this.mode === 'campaign';
+    this.isSandbox = this.mode === 'sandbox'; // free-roam: no waves/enemies, no mining, R respawns
     this.waveCount = this.isCampaign ? BALANCE.campaign.waveCount : BALANCE.progression.waveCount;
     this.headshotDamageMult = this.isCampaign ? BALANCE.campaign.headshotDamageMult : 1;
 
@@ -542,7 +543,9 @@ export class Game {
 
   start() {
     this.prewarmShaders();
-    this.startNextWave();
+    // Sandbox: free-roam an (optionally imported) map — no waves spawn.
+    if (this.isSandbox) this.hud.showMessage('Sandbox — pulsa R para reaparecer', 2600);
+    else this.startNextWave();
     this.platform.loop.start(() => this.tick());
   }
 
@@ -666,8 +669,10 @@ export class Game {
     this.updateSamuraiState(delta);
 
     if (this.input.consume('reload')) {
-      this.weapons.reload();
-      this.audio.reload();
+      // Sandbox: R teleports you back to a safe spawn (frees you if you get stuck
+      // somewhere in an imported map). Everywhere else it reloads the weapon.
+      if (this.isSandbox) this.respawnSandbox();
+      else { this.weapons.reload(); this.audio.reload(); }
     }
     if (this.input.consume('interact')) {
       this.inventory.toggleOpen();
@@ -780,7 +785,7 @@ export class Game {
 
     // Between waves: a visible 5s countdown, then the next wave. The final wave
     // goes straight to victory (no next wave to count down to).
-    if (!this.victory && this.state === 'playing') {
+    if (!this.victory && !this.isSandbox && this.state === 'playing') {
       if (this.enemies.aliveCount() === 0) {
         if (this.wave >= this.waveCount) {
           this.advanceWave();
@@ -910,6 +915,7 @@ export class Game {
       skeletons: this.skeletons.getAliveCount(),
       witches: this.witches.getAliveCount(),
       snow: this.isSnow ? this.snow.getAliveCount() : null,
+      sandbox: this.isSandbox,
       coins: this.coins,
       revive: this.hasRevive,
       guard: this.player.guardActive,
@@ -1969,7 +1975,16 @@ export class Game {
     }
   }
 
+  // Sandbox: drop the player back at a walkable spawn (R), velocity zeroed.
+  respawnSandbox() {
+    const spawn = this.world.getRandomSpawnPoint?.() ?? this.world.getSpawnPoint();
+    this.player.setPosition(spawn.x, spawn.y, spawn.z);
+    this.player.velocity.set(0, 0, 0);
+    this.effects.impact(this.player.object.position, 0x9fd0ff);
+  }
+
   mineTargetBlock() {
+    if (this.isSandbox) return; // sandbox can't break blocks
     if (!this.character.canPlaceBlocks) return;
     const hit = this.world.raycastBlock(this.getCameraWorldPosition(), this.getLookDirection(), BALANCE.world.interactionRange);
     if (!hit || hit.type === 'water') return;
