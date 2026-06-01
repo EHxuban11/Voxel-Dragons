@@ -335,9 +335,14 @@ export const BALANCE = deepFreeze({
   // when time resumes. The right-side bar fills by dealing damage and empties on
   // The World.
   dio: {
-    knife: { damage: 14, speed: 44, cooldown: 0.22, radius: 0.55, life: 2.4, fill: 1.5 },
-    six: { damage: 14, count: 6, spread: 1.05, cooldown: 3.5, fill: 1.0 }, // each knife identical + independent
-    stopSign: { damage: 55, radius: 4.5, cooldown: 1.5, ahead: 5, fill: 4 },
+    // hitRadius is generous (3D) so a level-flying knife still connects with a
+    // ground enemy whose origin sits at its feet.
+    knife: { damage: 14, speed: 44, cooldown: 0.22, hitRadius: 2.2, life: 2.4, fill: 1.5 },
+    // Right click: 6 knives scattered at random within an invisible disc in
+    // front of the view, all flying forward. Each is identical + independent.
+    six: { damage: 14, count: 6, circleRadius: 1.7, cooldown: 3.5, fill: 1.0 },
+    // Stop Sign swings down from the hand to slam the ground (damage on landing).
+    stopSign: { damage: 55, radius: 4.5, cooldown: 1.5, ahead: 5, fill: 4, swing: 0.2, hold: 0.55 },
     timestop: { duration: 5, freezeDelay: 0.18, gaugeMax: 36 },
   },
 

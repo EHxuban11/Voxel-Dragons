@@ -38,15 +38,17 @@ test('left click throws one knife, on a cooldown', () => {
   assert.equal(dio.throwKnife(), true, 'fires again once cooled down');
 });
 
-test('right click throws six independent knives', () => {
+test('right click throws six independent knives scattered in a disc', () => {
   const { dio } = makeDio();
   assert.equal(dio.sixKnives(), true);
-  assert.equal(dio.knives.length, BALANCE.dio.six.count);
   assert.equal(dio.knives.length, 6);
   // Each is its own entity with the same damage.
   for (const k of dio.knives) assert.equal(k.damage, BALANCE.dio.six.damage);
-  const refs = new Set(dio.knives);
-  assert.equal(refs.size, 6, 'six distinct projectiles');
+  assert.equal(new Set(dio.knives).size, 6, 'six distinct projectiles');
+  // Not a straight line: the spawn points spread across more than one axis.
+  const xs = new Set(dio.knives.map((k) => k.position.x.toFixed(3)));
+  const ys = new Set(dio.knives.map((k) => k.position.y.toFixed(3)));
+  assert.ok(xs.size > 1 && ys.size > 1, 'scattered in a disc, not a flat line');
 });
 
 test('hitting enemies fills the gauge; The World needs a full bar', () => {
@@ -93,7 +95,18 @@ test('when time resumes, hanging knives launch and become lethal again', () => {
   assert.ok(knife.velocity.length() > 1, 'the knife is moving again');
 });
 
-test('Stop Sign used during The World defers its damage until time resumes', () => {
+test('Stop Sign swings down from the hand and only deals damage on landing', () => {
+  const { dio, enemies } = makeDio({ near: true });
+  let melees = 0;
+  const realHit = enemies.hitMelee.bind(enemies);
+  enemies.hitMelee = (...a) => { melees += 1; return realHit(...a); };
+  dio.stopSign();
+  assert.equal(melees, 0, 'not instant — it swings first');
+  for (let i = 0; i < 8; i += 1) dio.update(0.05); // past the swing -> lands
+  assert.ok(melees >= 1, 'damage lands when the sign hits the ground');
+});
+
+test('Stop Sign used during The World freezes mid-swing, dealing damage only after resume', () => {
   const { dio, enemies } = makeDio({ near: true });
   dio.gauge = dio.gaugeMax;
   dio.timestop();
@@ -101,9 +114,9 @@ test('Stop Sign used during The World defers its damage until time resumes', () 
   const realHit = enemies.hitMelee.bind(enemies);
   enemies.hitMelee = (...a) => { melees += 1; return realHit(...a); };
   dio.stopSign();
-  assert.equal(melees, 0, 'no damage applied during the stop');
-  assert.equal(dio.pendingResume.length, 1, 'the slam is queued');
-  for (let i = 0; i < 110 && dio.timestopActive; i += 1) dio.update(0.05);
-  assert.ok(melees >= 1, 'the slam lands once time resumes');
-  assert.equal(dio.pendingResume.length, 0);
+  for (let i = 0; i < 6; i += 1) dio.update(0.05); // frozen mid-swing
+  assert.equal(melees, 0, 'no damage while time is stopped');
+  for (let i = 0; i < 110 && dio.timestopActive; i += 1) dio.update(0.05); // end the stop
+  for (let i = 0; i < 10; i += 1) dio.update(0.05); // swing finishes
+  assert.ok(melees >= 1, 'the slam lands after time resumes');
 });

@@ -24,7 +24,6 @@ export class DioController {
     this.cfg = BALANCE.dio;
     this.knives = [];
     this.signs = [];
-    this.pendingResume = []; // Stop Sign slams queued during The World
     this.gauge = 0;
     this.cooldowns = { knife: 0, six: 0, stopSign: 0 };
     this.timestopActive = false;
@@ -54,16 +53,20 @@ export class DioController {
     return true;
   }
 
-  // Right click: six independent knives spread in a line.
+  // Right click: six independent knives scattered at random points within an
+  // invisible disc in front of the view, all flying forward.
   sixKnives() {
     if (this.cooldowns.six > 0) return false;
     this.cooldowns.six = this.cfg.six.cooldown;
     const dir = this.direction();
     const right = this._right(dir);
+    const up = new THREE.Vector3().crossVectors(dir, right).normalize(); // view-up
     const n = this.cfg.six.count;
     for (let i = 0; i < n; i += 1) {
-      const off = (i - (n - 1) / 2) * this.cfg.six.spread;
-      this._spawnKnife(dir, this.cfg.six.damage, this.cfg.six.fill, right.clone().multiplyScalar(off));
+      const angle = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * this.cfg.six.circleRadius; // uniform in the disc
+      const offset = right.clone().multiplyScalar(Math.cos(angle) * r).addScaledVector(up, Math.sin(angle) * r);
+      this._spawnKnife(dir, this.cfg.six.damage, this.cfg.six.fill, offset);
     }
     this.audio?.shoot?.('shotgun');
     return true;
@@ -132,12 +135,14 @@ export class DioController {
       k.life -= delta;
 
       if (this._solid(k.position)) { this.effects.impact(k.position, 0xd7dee7); this._removeKnife(i); continue; }
-      if (this.enemies.anyNear(k.position, k.radius ?? this.cfg.knife.radius)) {
-        const hits = this.enemies.hitMelee(k.position, ANY_DIR, this.cfg.knife.radius + 0.4, k.damage, -1);
-        if (hits.length) this._fill(k.fill);
-        this.effects.impact(k.position, 0xfff0a0);
-        this._removeKnife(i);
-        continue;
+      if (this.enemies.anyNear(k.position, this.cfg.knife.hitRadius)) {
+        const hits = this.enemies.hitMelee(k.position, ANY_DIR, this.cfg.knife.hitRadius, k.damage, -1);
+        if (hits.length) {
+          this._fill(k.fill);
+          this.effects.impact(k.position, 0xfff0a0);
+          this._removeKnife(i);
+          continue;
+        }
       }
       if (k.life <= 0 || k.position.y < -4) this._removeKnife(i);
     }
@@ -151,6 +156,10 @@ export class DioController {
   }
 
   // --- Stop Sign -------------------------------------------------------------
+  // Swings a road sign down from Dio's hand into the ground ahead; the damage
+  // lands when the sign hits the floor (not on press). Because the swing is
+  // frozen while time is stopped, a Stop Sign used during The World only deals
+  // its damage once time resumes and the sign finishes its arc.
   stopSign() {
     if (this.cooldowns.stopSign > 0) return false;
     this.cooldowns.stopSign = this.cfg.stopSign.cooldown;
@@ -159,14 +168,7 @@ export class DioController {
     const aim = origin.clone().addScaledVector(dir, this.cfg.stopSign.ahead);
     const gy = this.world?.getGroundHeight?.(aim.x, aim.z) ?? aim.y;
     const center = new THREE.Vector3(aim.x, gy, aim.z);
-    this._spawnSign(center);
-    this.audio?.explosion?.();
-    if (this.timestopActive) {
-      // Damage is dealt only once time resumes.
-      this.pendingResume.push({ center: center.clone(), radius: this.cfg.stopSign.radius, damage: this.cfg.stopSign.damage, fill: this.cfg.stopSign.fill });
-    } else {
-      this._applySlam(center, this.cfg.stopSign.radius, this.cfg.stopSign.damage, this.cfg.stopSign.fill);
-    }
+    this._spawnSign(origin, dir, center);
     return true;
   }
 
@@ -175,36 +177,55 @@ export class DioController {
     if (hits?.length) this._fill(hits.length * fill);
     this.effects.explosion(center.clone());
     this.effects.shockwave(center.clone(), radius, 0xd83b3b);
+    this.audio?.explosion?.();
   }
 
-  _spawnSign(center) {
+  _spawnSign(origin, dir, center) {
     const g = new THREE.Group();
     const post = new THREE.Mesh(
       new THREE.BoxGeometry(0.14, 3, 0.14),
       new THREE.MeshStandardMaterial({ color: 0x9aa0aa, roughness: 0.7, flatShading: true }),
     );
-    post.position.y = 1.5;
+    post.position.y = -1.4; // grip is at the top; the panel leads the swing
     const sign = new THREE.Mesh(
       new THREE.BoxGeometry(1.7, 1.7, 0.14),
       new THREE.MeshStandardMaterial({ color: 0xd83b3b, emissive: 0x551010, emissiveIntensity: 0.5, roughness: 0.6, flatShading: true }),
     );
-    sign.position.y = 3.2;
+    sign.position.y = -3.0;
     g.add(post, sign);
-    g.position.set(center.x, center.y + 7, center.z); // starts high, slams down
+    const hand = origin.clone().addScaledVector(dir, 1.0);
+    hand.y = origin.y; // starts at hand height, swings down to the ground
+    g.position.copy(hand);
     g.frustumCulled = false;
     this.scene.add(g);
-    this.signs.push({ mesh: g, age: 0, ttl: 0.9, groundY: center.y });
+    this.signs.push({
+      mesh: g,
+      age: 0,
+      swing: this.cfg.stopSign.swing,
+      hold: this.cfg.stopSign.hold,
+      from: hand.clone(),
+      to: center.clone(),
+      slam: { center: center.clone(), radius: this.cfg.stopSign.radius, damage: this.cfg.stopSign.damage, fill: this.cfg.stopSign.fill },
+      applied: false,
+    });
   }
 
   _updateSigns(delta) {
     for (let i = this.signs.length - 1; i >= 0; i -= 1) {
       const s = this.signs[i];
-      // The sign is frozen along with everything else while time is stopped.
+      // Frozen mid-swing while time is stopped — so the damage defers to resume.
       if (this.timestopActive) continue;
       s.age += delta;
-      const drop = THREE.MathUtils.clamp(s.age / 0.12, 0, 1); // slam down fast
-      s.mesh.position.y = THREE.MathUtils.lerp(s.groundY + 7, s.groundY, drop);
-      if (s.age >= s.ttl) {
+      const k = THREE.MathUtils.clamp(s.age / s.swing, 0, 1);
+      s.mesh.position.lerpVectors(s.from, s.to, k);
+      s.mesh.position.y += Math.sin(k * Math.PI) * 0.8; // slight arc
+      s.mesh.rotation.x = THREE.MathUtils.lerp(-1.45, 0.05, k); // overhead -> flat slam
+      s.mesh.rotation.y += delta * 8; // whirl as it comes down
+      if (k >= 1 && !s.applied) {
+        s.applied = true;
+        this._applySlam(s.slam.center, s.slam.radius, s.slam.damage, s.slam.fill);
+      }
+      if (s.age >= s.swing + s.hold) {
         this.scene.remove(s.mesh);
         s.mesh.traverse((c) => { c.geometry?.dispose?.(); c.material?.dispose?.(); });
         this.signs.splice(i, 1);
@@ -234,9 +255,7 @@ export class DioController {
       k.velocity.copy(k.dir).multiplyScalar(k.speed);
       k.life = Math.max(k.life, this.cfg.knife.life);
     }
-    // Deferred Stop Sign slams resolve now.
-    for (const s of this.pendingResume) this._applySlam(s.center, s.radius, s.damage, s.fill);
-    this.pendingResume.length = 0;
+    // Any Stop Sign frozen mid-swing now finishes its arc and lands its damage.
     this.hud?.showMessage?.('El tiempo vuelve a moverse', 1200);
   }
 
@@ -264,7 +283,6 @@ export class DioController {
     for (const s of this.signs) { this.scene.remove(s.mesh); s.mesh.traverse((c) => { c.geometry?.dispose?.(); c.material?.dispose?.(); }); }
     this.knives.length = 0;
     this.signs.length = 0;
-    this.pendingResume.length = 0;
   }
 }
 
