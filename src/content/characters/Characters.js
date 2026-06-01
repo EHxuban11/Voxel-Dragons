@@ -72,6 +72,18 @@ export const CHARACTERS = [
     speedMult: 0.95,
     secret: true, // hidden in the selector; unlocked by pressing Q+E together
   },
+  {
+    id: 'dio',
+    name: 'Dio',
+    emoji: '🔪',
+    loadout: 'knife', // throws knives; right click = a line of six
+    canPlaceBlocks: false,
+    ability: 'dio', // right click: six knives
+    health: 120,
+    shield: 60,
+    speedMult: 1.0,
+    secret: true, // unlocked by pressing Q+E together
+  },
 ];
 
 export function getCharacter(id) {

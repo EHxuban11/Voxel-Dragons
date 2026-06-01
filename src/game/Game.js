@@ -20,6 +20,7 @@ import { Shop } from '../ui/Shop.js';
 import { getIcon } from '../ui/Icons.js';
 import { MageController } from './combat/MageController.js';
 import { LuffyController } from './combat/LuffyController.js';
+import { DioController } from './combat/DioController.js';
 import { BALANCE } from '../core/config/GameBalance.js';
 
 export class Game {
@@ -254,6 +255,16 @@ export class Game {
     this._luffyLastHp = this.player.health + this.player.shield;
     this._luffyBaseMove = this.player.config.moveSpeed;
     this._luffyBaseJump = this.player.config.jumpSpeed;
+
+    // Dio: knife thrower with The World (timestop).
+    this.dio = this.character.loadout === 'knife'
+      ? new DioController({
+          scene: this.scene, effects: this.effects, world: this.world,
+          enemies: this.enemies, player: this.player,
+          camera: this.camera, audio: this.audio, hud: this.hud,
+        })
+      : null;
+    this.timeStopped = false; // set by Dio's The World; freezes the enemies
     this.shop = null;
     this.shopDone = false;
     this.victory = false;
@@ -691,23 +702,38 @@ export class Game {
       this.player.config.moveSpeed = this._luffyBaseMove * this.luffy.speedMult;
       this.player.config.jumpSpeed = this._luffyBaseJump * this.luffy.jumpMult;
     }
-    p.begin('dragons');
-    this.dragons.update(delta, this.player, this.scene);
-    p.end();
-    p.begin('zombies');
-    this.zombies.update(delta, this.player, this.world);
-    p.end();
-    p.begin('skeletons');
-    this.skeletons.update(delta, this.player, this.world);
-    p.end();
-    p.begin('witches');
-    this.witches.update(delta, this.player, this.world);
-    p.end();
+    if (this.dio) {
+      this.dio.update(delta);
+      this.timeStopped = this.dio.timestopActive;
+      if (this.timeStopped !== this._wasTimeStopped) {
+        // Drain the colour out of the 3D view while time is stopped.
+        this.renderer.domElement.style.filter = this.timeStopped ? 'grayscale(1)' : '';
+        this._wasTimeStopped = this.timeStopped;
+      }
+    }
+    // The World: enemies (and their in-flight projectiles) freeze while time is
+    // stopped — only the player keeps moving and attacking.
+    if (!this.timeStopped) {
+      p.begin('dragons');
+      this.dragons.update(delta, this.player, this.scene);
+      p.end();
+      p.begin('zombies');
+      this.zombies.update(delta, this.player, this.world);
+      p.end();
+      p.begin('skeletons');
+      this.skeletons.update(delta, this.player, this.world);
+      p.end();
+      p.begin('witches');
+      this.witches.update(delta, this.player, this.world);
+      p.end();
+    }
 
     p.begin('enemyEvents');
-    this.handleZombieEvents();
-    this.handleSkeletonArrows();
-    this.handleWitchPotions();
+    if (!this.timeStopped) {
+      this.handleZombieEvents();
+      this.handleSkeletonArrows();
+      this.handleWitchPotions();
+    }
 
     // Coins are earned by killing enemies.
     this.coins += this.dragons.consumeKills() * BALANCE.coins.dragon
@@ -764,13 +790,20 @@ export class Game {
     } else if (attackSlot?.kind === 'weapon') {
       if (attacking) this.handleFire();
     } else if (attackSlot?.kind === 'ability') {
-      if (this.input.pointerLocked && attackClicked) this.useAbility(attackSlot);
+      // Dio's knife is hold-to-throw (good cadence); other abilities are click.
+      if (this.dio && attackSlot.abilityId === 'knife') {
+        if (attacking) this.dio.throwKnife();
+      } else if (this.input.pointerLocked && attackClicked) {
+        this.useAbility(attackSlot);
+      }
     } else if (attackSlot?.kind === 'block') {
       if (this.input.pointerLocked && attackClicked) this.mineTargetBlock();
     }
 
-    this.handleDragonFireballs(delta);
-    this.handleDragonEvents();
+    if (!this.timeStopped) {
+      this.handleDragonFireballs(delta);
+      this.handleDragonEvents();
+    }
 
     if (!this.player.isAlive) {
       this.handlePlayerDeath();
@@ -847,7 +880,9 @@ export class Game {
       fps: this.fps,
       countdown: this.waveCountdown,
       inventory: this.inventory.snapshot(),
-      gear: this.luffy ? { name: this.luffy.gearName, ratio: this.luffy.gaugeRatio } : null,
+      gear: this.luffy
+        ? { name: this.luffy.gearName, ratio: this.luffy.gaugeRatio }
+        : (this.dio ? { name: 'THE WORLD', ratio: this.dio.gaugeRatio } : null),
       locked: this.input.pointerLocked
     });
   }
@@ -1650,11 +1685,12 @@ export class Game {
       // for the bomb slot and the dagger for the aerial strike.
       else if (this.character.loadout === 'spells') kind = 'staff';
       else if (this.character.loadout === 'gum') kind = 'fist'; // Luffy: his arm is the weapon
+      else if (this.character.loadout === 'knife') kind = 'dagger'; // Dio holds a knife
       else if (slot.abilityId === 'bomb') kind = 'bomb';
       else if (slot.abilityId === 'aerial') kind = 'dagger';
     }
 
-    const sleeveByLoadout = { guns: 0xffd166, sword: 0x9aa6b2, dagger: 0x3f6b3a, katana: 0xb33636, spells: 0x6a3fb5, gum: 0xd23b2b };
+    const sleeveByLoadout = { guns: 0xffd166, sword: 0x9aa6b2, dagger: 0x3f6b3a, katana: 0xb33636, spells: 0x6a3fb5, gum: 0xd23b2b, knife: 0xe8c860 };
     const hasBomb = slot?.abilityId === 'bomb' ? (slot.count ?? 0) > 0 : true;
     const model = kind ? buildViewmodel(kind, { sleeve: sleeveByLoadout[this.character.loadout] ?? 0x6d6d6d, hasBomb }) : null;
     if (model) {
@@ -1676,6 +1712,10 @@ export class Game {
         break;
       case 'luffy':
         this.luffy?.secondary();
+        break;
+      case 'dio':
+        // Right click of the knife: a line of six independent knives.
+        if (this.inventory.selectedSlot?.abilityId === 'knife') this.dio?.sixKnives();
         break;
       default:
         this.placeSelectedBlock();
@@ -1705,6 +1745,10 @@ export class Game {
       this.mage.tryCast(slot.abilityId);
     } else if (this.luffy && ['pistol', 'bazooka', 'gatling'].includes(slot.abilityId)) {
       this.luffy.useSkill(slot.abilityId);
+    } else if (this.dio && slot.abilityId === 'stopsign') {
+      this.dio.stopSign();
+    } else if (this.dio && slot.abilityId === 'timestop') {
+      this.dio.timestop();
     }
   }
 
@@ -2010,6 +2054,8 @@ export class Game {
     this.removeAerialCircle();
     this.mage?.dispose?.();
     this.luffy?.dispose?.();
+    this.dio?.dispose?.();
+    if (this.renderer?.domElement) this.renderer.domElement.style.filter = ''; // clear timestop grayscale
     for (const bomb of this.bombs) this.scene.remove(bomb.mesh);
     this.bombs.length = 0;
     for (const s of this.samuraiSlashes) this.scene.remove(s.group);

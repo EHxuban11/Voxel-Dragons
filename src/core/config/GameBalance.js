@@ -328,6 +328,19 @@ export const BALANCE = deepFreeze({
     ],
   },
 
+  // Dio (secret): a knife thrower. Left click throws a single knife at a good
+  // cadence; right click throws 6 independent knives in a line. Stop Sign slams
+  // a road sign for AoE every 1.5s. The World freezes time for 5s — only Dio
+  // moves; thrown knives drift then hang in the air and launch (dealing damage)
+  // when time resumes. The right-side bar fills by dealing damage and empties on
+  // The World.
+  dio: {
+    knife: { damage: 14, speed: 44, cooldown: 0.22, radius: 0.55, life: 2.4, fill: 1.5 },
+    six: { damage: 14, count: 6, spread: 1.05, cooldown: 3.5, fill: 1.0 }, // each knife identical + independent
+    stopSign: { damage: 55, radius: 4.5, cooldown: 1.5, ahead: 5, fill: 4 },
+    timestop: { duration: 5, freezeDelay: 0.18, gaugeMax: 36 },
+  },
+
   progression: {
     waveCount: 10, // total waves in a run
     shopWave: 5, // the shop opens before this wave

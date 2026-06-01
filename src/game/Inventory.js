@@ -41,6 +41,14 @@ function buildSlots(character, options = {}) {
       { kind: 'ability', abilityId: 'gatling', label: 'Gatling', count: null, color: '#c0392b', icon: 'slash' },
     ];
   }
+  if (character?.loadout === 'knife') {
+    // Dio: knife (hold to throw / right click = six), Stop Sign, The World.
+    return [
+      { kind: 'ability', abilityId: 'knife', label: 'Cuchillo', count: null, color: '#cfd6df', icon: 'dagger' },
+      { kind: 'ability', abilityId: 'stopsign', label: 'Stop Sign', count: null, color: '#d83b3b', icon: 'slash' },
+      { kind: 'ability', abilityId: 'timestop', label: 'The World', count: null, color: '#ffd166', icon: 'nuke' },
+    ];
+  }
   if (character?.loadout === 'spells') {
     return [
       { kind: 'ability', abilityId: 'fireball', label: 'Bola de fuego', count: null, color: '#ff6b1a', icon: 'fireball' },

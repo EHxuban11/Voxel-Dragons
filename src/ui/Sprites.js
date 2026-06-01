@@ -54,6 +54,14 @@ const CHARACTERS = {
     r(4, 8, 8, 6, '#6a4fa0');        // robe
     r(12, 4, 1, 10, '#8a5a32'); r(11, 3, 3, 2, '#54d2ff'); // staff + gem
   },
+  dio: (r) => {
+    r(4, 1, 8, 3, '#f2d24b');        // blonde hair
+    r(4, 4, 2, 3, '#f2d24b'); r(10, 4, 2, 3, '#f2d24b'); // side locks
+    r(5, 4, 6, 4, '#cdab83');        // face
+    r(6, 5, 1, 1, '#b5343a'); r(9, 5, 1, 1, '#b5343a'); // red eyes
+    r(4, 8, 8, 5, '#e8c860');        // golden outfit
+    r(12, 6, 1, 7, '#d7dee7'); r(11, 12, 2, 1, '#3a2a1a'); // knife
+  },
   luffy: (r) => {
     r(3, 3, 10, 2, '#f2c84b'); r(4, 1, 8, 2, '#f2c84b'); // straw hat brim + crown
     r(4, 3, 8, 1, '#b5343a');        // hat band
