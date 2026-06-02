@@ -14,6 +14,7 @@ const DEFAULT_STATE = {
   zombies: 0,
   skeletons: 0,
   witches: 0,
+  enemyLines: null,
   wave: 1,
   waveCount: 10,
   fps: 0,
@@ -247,6 +248,7 @@ function injectStyles() {
     }
 
     .vd-health-shell {
+      position: relative;
       height: 18px;
       overflow: hidden;
       background: rgba(18, 22, 26, 0.72);
@@ -260,6 +262,19 @@ function injectStyles() {
       background: linear-gradient(90deg, #d83b3b, #ff6b45 58%, #ffd166);
       transform-origin: left center;
       transition: transform 120ms ease-out, filter 120ms ease-out;
+    }
+
+    .vd-health-frozen {
+      position: absolute;
+      inset: 0 0 0 auto;
+      width: 100%;
+      transform: scaleX(0);
+      transform-origin: right center;
+      background:
+        repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.5) 0 4px, rgba(111, 210, 255, 0.45) 4px 8px),
+        linear-gradient(90deg, rgba(98, 193, 255, 0.28), rgba(220, 250, 255, 0.78));
+      box-shadow: inset 0 0 8px rgba(185, 240, 255, 0.9);
+      transition: transform 120ms ease-out;
     }
 
     /* Luffy's gear gauge: a vertical bar pinned to the right edge. */
@@ -762,7 +777,7 @@ export class HUD {
       <div class="vd-countdown" data-hud="countdown"></div>
       <div class="vd-top-right">
         <div class="vd-topline"><img class="vd-heart vd-glyph" data-hud="heart" src="${getGlyph('heart')}" alt="vida" /><span class="vd-coins"><img class="vd-glyph" src="${getGlyph('coin')}" alt="monedas" /> <span data-hud="coins">0</span></span></div>
-        Dragones: <span data-hud="dragons">0</span><br>Zombies: <span data-hud="zombies">0</span><br>Esqueletos: <span data-hud="skeletons">0</span><br>Brujas: <span data-hud="witches">0</span><span data-hud="snowLine" style="display:none"><br>Nieve: <span data-hud="snow">0</span></span>
+        <div data-hud="enemyList"></div>
       </div>
       <div class="vd-message" data-hud="message"></div>
       <div class="vd-deathscreen" data-hud="deathscreen">
@@ -774,7 +789,7 @@ export class HUD {
         <div class="vd-shield-label"><span data-hud="shieldName">Escudo</span> <span data-hud="shield">100 / 100</span></div>
         <div class="vd-shield-shell"><div class="vd-shield-fill" data-hud="shieldFill"></div></div>
         <div class="vd-health-label">Vida <span data-hud="health">100 / 100</span></div>
-        <div class="vd-health-shell"><div class="vd-health-fill" data-hud="healthFill"></div></div>
+        <div class="vd-health-shell"><div class="vd-health-fill" data-hud="healthFill"></div><div class="vd-health-frozen" data-hud="healthFrozen"></div></div>
       </div>
       <div class="vd-bottom-right">
         <div class="vd-weapon" data-hud="weapon">Blaster</div>
@@ -798,6 +813,7 @@ export class HUD {
       shieldFill: this.root.querySelector('[data-hud="shieldFill"]'),
       health: this.root.querySelector('[data-hud="health"]'),
       healthFill: this.root.querySelector('[data-hud="healthFill"]'),
+      healthFrozen: this.root.querySelector('[data-hud="healthFrozen"]'),
       ammo: this.root.querySelector('[data-hud="ammo"]'),
       weapon: this.root.querySelector('[data-hud="weapon"]'),
       dragons: this.root.querySelector('[data-hud="dragons"]'),
@@ -806,6 +822,7 @@ export class HUD {
       witches: this.root.querySelector('[data-hud="witches"]'),
       snow: this.root.querySelector('[data-hud="snow"]'),
       snowLine: this.root.querySelector('[data-hud="snowLine"]'),
+      enemyList: this.root.querySelector('[data-hud="enemyList"]'),
       fps: this.root.querySelector('[data-hud="fps"]'),
       coins: this.root.querySelector('[data-hud="coins"]'),
       heart: this.root.querySelector('[data-hud="heart"]'),
@@ -847,6 +864,7 @@ export class HUD {
   update(state = {}) {
     const nextState = { ...DEFAULT_STATE, ...state };
     const maxHealth = Math.max(1, firstNumber(nextState, ['maxHealth', 'healthMax'], DEFAULT_STATE.maxHealth));
+    const baseMaxHealth = Math.max(maxHealth, firstNumber(nextState, ['baseMaxHealth', 'healthBaseMax'], maxHealth));
     const health = Math.max(0, Math.min(maxHealth, firstNumber(nextState, ['health', 'hp'], DEFAULT_STATE.health)));
     const maxShield = Math.max(0, firstNumber(nextState, ['maxShield', 'shieldMax'], DEFAULT_STATE.maxShield));
     const shield = Math.max(0, Math.min(maxShield, firstNumber(nextState, ['shield'], DEFAULT_STATE.shield)));
@@ -859,19 +877,12 @@ export class HUD {
     this.nodes.shieldFill.style.transform = `scaleX(${maxShield > 0 ? shield / maxShield : 0})`;
     this.nodes.health.textContent = `${Math.round(health)} / ${Math.round(maxHealth)}`;
     this.nodes.healthFill.style.transform = `scaleX(${health / maxHealth})`;
+    this.nodes.healthFrozen.style.transform = `scaleX(${Math.max(0, Math.min(1, (baseMaxHealth - maxHealth) / baseMaxHealth))})`;
     this.nodes.weapon.textContent = weapon;
     this.nodes.ammo.textContent = nextState.ammoText != null
       ? nextState.ammoText
       : (maxAmmo > 0 ? `${ammo} / ${maxAmmo}` : String(ammo));
-    this.nodes.dragons.textContent = dragons.total === null ? String(dragons.value) : `${dragons.value} / ${dragons.total}`;
-    this.nodes.zombies.textContent = String(firstNumber(nextState, ['zombies'], DEFAULT_STATE.zombies));
-    this.nodes.skeletons.textContent = String(firstNumber(nextState, ['skeletons'], DEFAULT_STATE.skeletons));
-    this.nodes.witches.textContent = String(firstNumber(nextState, ['witches'], DEFAULT_STATE.witches));
-    if (this.nodes.snowLine) {
-      const snow = nextState.snow;
-      this.nodes.snowLine.style.display = (snow == null) ? 'none' : '';
-      if (snow != null) this.nodes.snow.textContent = String(snow);
-    }
+    this.updateEnemyList(nextState, dragons);
     this.nodes.fps.textContent = `${Math.round(firstNumber(nextState, ['fps'], DEFAULT_STATE.fps))} FPS`;
     this.nodes.coins.textContent = String(firstNumber(nextState, ['coins'], DEFAULT_STATE.coins));
     this.nodes.heart.classList.toggle('is-used', !nextState.revive);
@@ -913,6 +924,23 @@ export class HUD {
     }
 
     this.renderInventory(nextState.inventory);
+  }
+
+  updateEnemyList(state, dragons) {
+    const fallback = [
+      { label: 'Dragones', value: dragons.total === null ? String(dragons.value) : `${dragons.value} / ${dragons.total}` },
+      { label: 'Zombies', value: firstNumber(state, ['zombies'], DEFAULT_STATE.zombies) },
+      { label: 'Esqueletos', value: firstNumber(state, ['skeletons'], DEFAULT_STATE.skeletons) },
+      { label: 'Brujas', value: firstNumber(state, ['witches'], DEFAULT_STATE.witches) },
+    ];
+    const lines = Array.isArray(state.enemyLines) ? state.enemyLines : fallback;
+    this.nodes.enemyList.innerHTML = '';
+    for (const line of lines) {
+      if (!line || line.value == null) continue;
+      const row = document.createElement('div');
+      row.textContent = `${line.label}: ${line.value}`;
+      this.nodes.enemyList.appendChild(row);
+    }
   }
 
   renderInventory(inventory) {

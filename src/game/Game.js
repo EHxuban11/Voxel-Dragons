@@ -276,6 +276,8 @@ export class Game {
     this._baseJump = this.player.config.jumpSpeed;
     this.chillTimer = 0;
     this.chillFactor = 1;
+    this.healthFreezeBaseMax = this.player.maxHealth;
+    this.bossBlizzard = null;
     this.shop = null;
     this.shopDone = false;
     this.victory = false;
@@ -368,6 +370,7 @@ export class Game {
   // miniboss and the wave-10 Ice Colossus. The standard mobs are cleared so the
   // wintry map fields only its own enemies.
   spawnSnowWaveEnemies(w) {
+    this.clearBossBlizzard(true);
     this.zombies.spawnWave(0, this.player, this.world);
     this.skeletons.spawnWave(0, this.player, this.world);
     this.witches.spawnWave(0, this.player, this.world);
@@ -741,6 +744,7 @@ export class Game {
     const chillMult = this.chillTimer > 0 ? this.chillFactor : 1;
     this.player.config.moveSpeed = this._baseMove * (this.luffy ? this.luffy.speedMult : 1) * chillMult;
     this.player.config.jumpSpeed = this._baseJump * (this.luffy ? this.luffy.jumpMult : 1);
+    this.updateBossBlizzard(delta);
     if (this.dio) {
       this.dio.update(delta);
       this.timeStopped = this.dio.timestopActive;
@@ -902,6 +906,7 @@ export class Game {
     this.hud.update({
       health: this.player.health,
       maxHealth: this.player.maxHealth,
+      baseMaxHealth: this.healthFreezeBaseMax,
       shield: this.player.shield,
       maxShield: this.player.maxShield,
       shieldLabel: this.character.manaName ? 'Maná' : 'Escudo',
@@ -914,7 +919,7 @@ export class Game {
       zombies: this.zombies.getAliveCount(),
       skeletons: this.skeletons.getAliveCount(),
       witches: this.witches.getAliveCount(),
-      snow: this.isSnow ? this.snow.getAliveCount() : null,
+      enemyLines: this.getHudEnemyLines(),
       sandbox: this.isSandbox,
       coins: this.coins,
       revive: this.hasRevive,
@@ -929,6 +934,18 @@ export class Game {
         : (this.dio ? { name: 'THE WORLD', ratio: this.dio.gaugeRatio } : null),
       locked: this.input.pointerLocked
     });
+  }
+
+  getHudEnemyLines() {
+    if (this.isSnow) {
+      return this.snow.getAliveBreakdown().map(({ label, count }) => ({ label, value: count }));
+    }
+    return [
+      { label: 'Dragones', value: `${this.dragons.getAliveCount()} / ${this.dragons.dragons.length}` },
+      { label: 'Zombies', value: this.zombies.getAliveCount() },
+      { label: 'Esqueletos', value: this.skeletons.getAliveCount() },
+      { label: 'Brujas', value: this.witches.getAliveCount() },
+    ];
   }
 
   clampPlayerToBounds() {
@@ -1062,6 +1079,7 @@ export class Game {
         break;
       case 'health':
         this.player.maxHealth += 40;
+        this.healthFreezeBaseMax = Math.max(this.healthFreezeBaseMax, this.player.maxHealth);
         this.player.health = Math.min(this.player.maxHealth, this.player.health + 40);
         break;
       case 'shield':
@@ -1697,12 +1715,22 @@ export class Game {
   handleSnowEvents() {
     for (const event of this.snow.consumeEvents()) {
       if (event.type === 'summon') {
-        this.snow.reinforce({ yeti: event.yetis ?? 0, wisp: event.wisps ?? 0 }, this.player, this.world);
+        this.snow.reinforce({ yeti: event.yetis ?? 0, snowman: event.snowmen ?? 0, wisp: event.wisps ?? 0 }, this.player, this.world);
         this.hud.showMessage('❄ El yeti ruge y llama refuerzos', 1400);
         this.audio.explosion?.();
       } else if (event.type === 'blizzard') {
         this._applyChill(event.chill);
-        this.hud.showMessage('❄ ¡Ventisca!', 1400);
+        this.startBossBlizzard(event);
+        this.hud.showMessage('❄ ¡Ventisca! Busca la antorcha', 1800);
+      } else if (event.type === 'bossIntro') {
+        this.hud.showMessage('❄ Una ventisca cubre el centro...', 2200);
+        this.effects.shockwave(event.position, 12, 0xbfeaff);
+      } else if (event.type === 'bossIntroDone') {
+        this.hud.showMessage('☠ COLOSO DE HIELO', 2600);
+        this.effects.bigFlash(event.position, 22, 0.65);
+      } else if (event.type === 'split') {
+        this.hud.showMessage('❄ El coloso se divide', 1800);
+        this.effects.shockwave(event.position, 9, 0xbfeaff);
       } else if (event.type === 'parry') {
         this.effects.impact(event.position, 0x9fe8ff);
       } else if (event.type === 'attack' || event.type === 'projectile' || event.type === 'aoe') {
@@ -1734,6 +1762,42 @@ export class Game {
     this.chillTimer = Math.max(this.chillTimer, chill.duration ?? 2);
     this.chillFactor = chill.factor ?? 0.6;
     this.hud.setTint?.(0.18);
+  }
+
+  startBossBlizzard(event) {
+    const torch = event.torch ?? {};
+    const position = torch.position?.isVector3 ? torch.position.clone() : new THREE.Vector3();
+    this.healthFreezeBaseMax = Math.max(this.healthFreezeBaseMax, this.player.maxHealth);
+    this.bossBlizzard = {
+      time: event.duration ?? BALANCE.snow.boss.blizzard.duration,
+      freezePerSecond: event.freezePerSecond ?? BALANCE.snow.boss.blizzard.freezePerSecond,
+      torchPosition: position,
+      torchRadius: torch.radius ?? BALANCE.snow.boss.blizzard.torchRadius,
+    };
+  }
+
+  updateBossBlizzard(delta) {
+    if (!this.bossBlizzard) return;
+    this.bossBlizzard.time -= delta;
+    const torch = this.bossBlizzard.torchPosition;
+    const dx = this.player.object.position.x - torch.x;
+    const dz = this.player.object.position.z - torch.z;
+    const protectedByTorch = Math.hypot(dx, dz) <= this.bossBlizzard.torchRadius;
+    if (!protectedByTorch) {
+      const loss = this.healthFreezeBaseMax * this.bossBlizzard.freezePerSecond * delta;
+      const minMax = Math.max(1, this.healthFreezeBaseMax * 0.01);
+      this.player.maxHealth = Math.max(minMax, this.player.maxHealth - loss);
+      this.player.health = Math.min(this.player.health, this.player.maxHealth);
+    }
+    if (this.bossBlizzard.time <= 0) this.bossBlizzard = null;
+  }
+
+  clearBossBlizzard(restoreMax = false) {
+    this.bossBlizzard = null;
+    if (restoreMax) {
+      this.player.maxHealth = this.healthFreezeBaseMax;
+      this.player.health = Math.min(this.player.health, this.player.maxHealth);
+    }
   }
 
   onSelectionChanged() {

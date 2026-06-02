@@ -352,7 +352,7 @@ export const BALANCE = deepFreeze({
   snow: {
     spawnRadiusMin: 16,
     spawnRadiusMax: 27,
-    coins: { yeti: 4, roller: 3, wisp: 3, alpha: 30, colossus: 90 },
+    coins: { yeti: 4, roller: 3, wisp: 3, snowman: 3, alpha: 30, colossus: 90 },
     // Yeti: a big, tanky, slow brute. Its frozen blows chill (slow) the player.
     yeti: { health: 70, speed: 2.5, damage: 16, attackRange: 2.7, attackCooldown: 1.4, scale: 2.2, chill: { factor: 0.55, duration: 2.5 } },
     // Snowroller: a packed snowball that rolls straight at you, fast — dodge it.
@@ -360,22 +360,28 @@ export const BALANCE = deepFreeze({
     roller: { health: 26, speed: 11, damage: 30, hitRadius: 1.5 },
     // Frost Wisp: floats, keeps its distance and lobs chilling ice shards.
     wisp: { health: 20, speed: 3.4, hover: 3.2, keepMin: 10, keepMax: 17, shootCooldown: 2.0, shardSpeed: 24, shardDamage: 8, chill: { factor: 0.7, duration: 1.6 } },
+    // Snowman: Minecraft-style ranged mob, the snow biome's skeleton analogue.
+    snowman: { health: 24, speed: 2.8, keepMin: 9, keepMax: 16, shootCooldown: 1.8, snowballSpeed: 26, snowballDamage: 5, chill: { factor: 0.62, duration: 1.9 } },
     // Wave 5 miniboss — Alpha Yeti: charges, ground-slam ice ring, snow boulders,
     // and a roar that summons lesser yetis.
     miniboss: {
       wave: 5, health: 820, scale: 2.9, speed: 2.8,
       slam: { radius: 6.5, damage: 26, chill: { factor: 0.5, duration: 2.5 } },
       boulder: { damage: 22, speed: 19, hitRadius: 1.2 },
-      summon: { yetis: 2 },
+      spikes: { count: 7, spacing: 2.2, radius: 1.2, telegraph: 1.0, damage: 34, columnTtl: 0.75, chill: { factor: 0.45, duration: 2.4 } },
+      summon: { yetis: 2, snowmen: 1 },
       attackEvery: [2.0, 3.0],
     },
-    // Wave 10 boss — Ice Colossus: huge, slow, central. Erupting icicle fields,
-    // a frost-breath cone (heavy chill), and a blizzard roar that summons + chills.
+    // Wave 10 boss — Ice Colossus: less HP than the Dragon King, but blizzards
+    // freeze max health unless you stand near the summoned torch.
     boss: {
-      wave: 10, health: 5200, scale: 3.6, speed: 1.5, center: [0, 0], altitude: 0,
+      wave: 10, health: 3600, scale: 3.6, speed: 1.5, center: [0, 0], altitude: 0,
+      intro: { duration: 4.0, radius: 16 },
+      split: { healthMult: 0.5, damageMult: 0.5, scale: 0.78, offset: 7 },
       icicles: { count: 8, telegraph: 1.1, radius: 3.0, spread: 13, damage: 72, columnTtl: 0.6 },
       frost: { telegraph: 1.6, range: 24, halfAngle: 0.6, damage: 55, chill: { factor: 0.4, duration: 3 } },
-      blizzard: { roar: 1.2, yetis: 3, wisps: 2, chill: { factor: 0.5, duration: 3 } },
+      stomp: { telegraph: 0.85, radius: 9, damage: 42, chill: { factor: 0.5, duration: 2.5 } },
+      blizzard: { duration: 8, torchRadius: 6.5, freezePerSecond: 0.01, yetis: 2, snowmen: 2, wisps: 1, chill: { factor: 0.5, duration: 3 } },
       attackEvery: [2.2, 3.4],
     },
   },

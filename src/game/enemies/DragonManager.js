@@ -1284,9 +1284,23 @@ export class DragonManager {
       if (mat.userData.baseEmissive === undefined) {
         mat.userData.baseEmissive = mat.emissive.getHex();
         mat.userData.baseEmissiveIntensity = mat.emissiveIntensity;
+        mat.userData.baseDepthTest = mat.depthTest;
+        mat.userData.baseDepthWrite = mat.depthWrite;
+        mat.userData.baseTransparent = mat.transparent;
       }
-      if (on) { mat.emissive.setHex(color); mat.emissiveIntensity = 0.85; }
-      else { mat.emissive.setHex(mat.userData.baseEmissive); mat.emissiveIntensity = mat.userData.baseEmissiveIntensity; }
+      if (on) {
+        mat.emissive.setHex(color);
+        mat.emissiveIntensity = 0.85;
+        mat.depthTest = false;
+        mat.depthWrite = false;
+        mat.transparent = true;
+      } else {
+        mat.emissive.setHex(mat.userData.baseEmissive);
+        mat.emissiveIntensity = mat.userData.baseEmissiveIntensity;
+        mat.depthTest = mat.userData.baseDepthTest;
+        mat.depthWrite = mat.userData.baseDepthWrite;
+        mat.transparent = mat.userData.baseTransparent;
+      }
     }
   }
 
